@@ -1,0 +1,10 @@
+name: zaizuo_relay_interop
+description: 在座 Go 与 Dart 哑中继 v1 的本机真实进程端点互换验证工具。
+publish_to: none
+
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+
+dependencies:
+  zaizuo_relay:
+    path: ../../packages/relay_dart

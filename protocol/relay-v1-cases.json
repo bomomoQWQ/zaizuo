@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "valid": [
+    {"op":"subscribe","request_id":"s1","topic":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"op":"unsubscribe","request_id":"u1","topic":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"op":"publish","request_id":"p1","topic":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","payload":"AQID"}
+  ],
+  "invalid": [
+    {"request":{"op":"subscribe","request_id":"s1","topic":"short"},"code":"bad_request"},
+    {"request":{"op":"subscribe","request_id":"s1","topic":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"code":"bad_request"},
+    {"request":{"op":"publish","request_id":"p1","topic":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","payload":"AQID "},"code":"bad_request"},
+    {"request":{"op":"publish","request_id":"p1","topic":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","payload":""},"code":"bad_request"},
+    {"request":{"op":"subscribe","request_id":"bad id","topic":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"code":"bad_request"},
+    {"request":{"op":"subscribe","request_id":"s1","topic":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","extra":true},"code":"bad_request"},
+    {"request":{"op":"dance","request_id":"x1"},"code":"unsupported_op"}
+  ]
+}

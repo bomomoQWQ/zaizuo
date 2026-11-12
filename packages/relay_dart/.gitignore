@@ -1,0 +1,6 @@
+.dart_tool/
+.packages
+# Library consumers resolve compatible versions for their own SDK.
+pubspec.lock
+build/
+coverage/

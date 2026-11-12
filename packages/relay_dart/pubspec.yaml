@@ -1,0 +1,13 @@
+name: zaizuo_relay
+description: 在座原生客户端可嵌入的纯 Dart 哑中继协议 v1 原型。
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+
+dependencies:
+  crypto: ^3.0.6
+
+dev_dependencies:
+  test: ^1.25.15

@@ -1,0 +1,8 @@
+.git
+.local
+*.exe
+*.test
+coverage*
+*.token
+.env
+.env.*
