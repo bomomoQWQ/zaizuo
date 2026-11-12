@@ -1,0 +1,12 @@
+name: zaizuo_onebot
+description: 在座纯 Dart OneBot 11/12 子集投影与本机传输。
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+dependencies:
+  crypto: ^3.0.6
+  zaizuo_domain:
+    path: ../domain
+dev_dependencies:
+  test: ^1.25.0
