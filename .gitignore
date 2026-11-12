@@ -11,3 +11,11 @@ coverage/
 !.env.example
 *.key
 *.pem
+*.keybox
+unlock.factor
+local-private.json
+local-private.json.new
+recovery.txt
+state.enc
+onebot-ids.json
+onebot-ids.json.tmp
