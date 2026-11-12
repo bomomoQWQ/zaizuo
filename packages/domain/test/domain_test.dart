@@ -58,6 +58,60 @@ final class Fixture {
 
 void main() {
   group('身份、Account 1:N bots 和配额', () {
+    test('用户id不能占用内部scope或含路径/控制字符，长度边界强制', () {
+      final f = Fixture();
+      for (final id in [
+        'control:community',
+        'feed:alice:private',
+        'dm:1',
+        'message:1',
+        'x#shadow',
+        ' a',
+        'a b',
+        'a\n',
+        'a/../b',
+        'a\\b',
+        '中文',
+        List.filled(129, 'a').join()
+      ]) {
+        expect(
+            () =>
+                f.service.registerBot(actor: f.alice, id: id, displayName: 'x'),
+            throwsA(error('bad_request')),
+            reason: id);
+      }
+      f.space();
+      for (final id in [
+        'control:community',
+        'feed:alice:private',
+        'thread:1',
+        'room#shadow',
+        'room#shadow#nested',
+        List.filled(241, 'a').join()
+      ]) {
+        expect(
+            () => f.service.createRoom(
+                actor: f.alice, spaceId: 'space', id: id, title: 'x'),
+            throwsA(error('bad_request')),
+            reason: id);
+      }
+      final exact = List.filled(240, 'r').join();
+      expect(
+          f.service
+              .createRoom(
+                  actor: f.alice, spaceId: 'space', id: exact, title: 'x')
+              .shadowConversationId!
+              .length,
+          247);
+      expect(
+          () => f.service.createSpace(
+              actor: f.alice,
+              id: 'feed:alice:public',
+              title: 'x',
+              publicChannel: true),
+          throwsA(error('bad_request')));
+    });
+
     test('账户名规范和显示字素上限由 domain 独立强制', () {
       final service = ChatService(ChatState());
       for (final name in ['中文', 'a-b', 'a.b', 'abcdefghijklmno', '', 'a b']) {
@@ -1128,16 +1182,18 @@ void main() {
       final f = Fixture();
       f.service.addFriend(actor: f.alice, targetId: f.bob.id);
       final next = f.service.state.events.length + 2;
-      f.service.createSpace(
-          actor: f.alice,
-          id: 'custom',
-          title: 'x',
-          publicChannel: true,
-          defaultRoomId: 'dm:$next');
+      expect(
+          () => f.service.createSpace(
+              actor: f.alice,
+              id: 'custom',
+              title: 'x',
+              publicChannel: true,
+              defaultRoomId: 'dm:$next'),
+          throwsA(error('bad_request')));
       final dm =
           f.service.directConversation(actor: f.alice, targetId: f.bob.id);
-      expect(dm.id, isNot('dm:$next'));
-      expect(f.service.state.conversations['dm:$next']!.kind, 'chat');
+      expect(dm.kind, 'direct');
+      expect(f.service.state.conversations.containsKey('dm:$next'), isFalse);
     });
   });
 

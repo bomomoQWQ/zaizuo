@@ -1,0 +1,20 @@
+name: zaizuo_runtime
+description: 在座非界面应用协调层与命令行原型。
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+dependencies:
+  zaizuo_core:
+    path: ../core
+  zaizuo_domain:
+    path: ../domain
+  zaizuo_onebot:
+    path: ../onebot
+  zaizuo_relay:
+    path: ../relay_dart
+  path: ^1.9.1
+  cryptography: ^2.9.0
+dev_dependencies:
+  test: ^1.25.15
+  lints: ^5.1.1

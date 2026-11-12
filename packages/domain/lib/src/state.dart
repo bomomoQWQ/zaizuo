@@ -99,6 +99,7 @@ final class ChatState {
   void _validate() {
     _require(_accounts.length == _names.length, 'bad_request', '重复账户名');
     for (final account in _accounts.values) {
+      _userId(account.id);
       _require(RegExp(r'^[a-z0-9_]{1,14}$').hasMatch(account.name),
           'bad_request', '无效的账户名');
       _displayName(account.displayName);
@@ -108,6 +109,7 @@ final class ChatState {
       _require(_principalExists(event.actorId), 'bad_request', '事件作者不存在');
     }
     for (final bot in _bots.values) {
+      _userId(bot.id);
       _displayName(bot.displayName);
       _require(bot.caps.every(BotCapability.all.contains), 'bad_request',
           '无效机器人内容能力');
@@ -117,6 +119,7 @@ final class ChatState {
           '机器人必须有且仅有一个合法 owner');
     }
     for (final space in _spaces.values) {
+      _userId(space.id, label: 'space id');
       _require(
           _accounts.containsKey(space.ownerId) &&
               _rooms[space.defaultRoomId]?.spaceId == space.id,
@@ -130,6 +133,7 @@ final class ChatState {
           '空间 owner/管理员必须是当前成员');
     }
     for (final room in _rooms.values) {
+      _userId(room.id, label: 'room id', max: 240, room: true);
       _require(_spaces.containsKey(room.spaceId), 'bad_request', '房间空间不存在');
       _require(
           room.kind == 'chat' || room.kind == 'forum', 'bad_request', '无效房间类型');
@@ -160,6 +164,14 @@ final class ChatState {
     }
     _require(directCount == _directPairs.length, 'bad_request', '同一对主体存在重复私聊');
     for (final c in _conversations.values) {
+      _require(
+          c.id.isNotEmpty &&
+              c.id.length <= 256 &&
+              !c.id.startsWith('control:') &&
+              !c.id.startsWith('feed:') &&
+              !RegExp(r'\s|[\x00-\x1F\x7F]').hasMatch(c.id),
+          'bad_request',
+          '业务会话不得占用control/feed保留scope或含控制字符');
       _require({'direct', 'chat', 'shadow', 'forumThread'}.contains(c.kind),
           'bad_request', '无效会话类型');
       if (c.kind != 'direct')

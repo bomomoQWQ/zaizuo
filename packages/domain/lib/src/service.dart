@@ -47,6 +47,13 @@ final class ChatService {
         state._events.any((e) => e.id == id);
     if (_idGenerator != null) {
       final id = _id(_idGenerator(prefix), 'generated id');
+      _require(
+          id.length <= 256 &&
+              !id.startsWith('control:') &&
+              (prefix == 'feed' || !id.startsWith('feed:')) &&
+              !RegExp(r'\s|[\x00-\x1F\x7F]').hasMatch(id),
+          'bad_request',
+          '生成id不得占用control/feed保留scope或含控制字符');
       _require(!used(id), 'conflict', 'idGenerator 返回了重复编号');
       _issuedIds.add(id);
       return id;
@@ -120,7 +127,7 @@ final class ChatService {
   }
 
   void _newPrincipal(String id) {
-    _id(id);
+    _userId(id);
     _require(!state._principalExists(id), 'conflict', '主体编号已存在');
   }
 
@@ -268,7 +275,7 @@ final class ChatService {
   BotRecord registerBot(
       {required Actor actor, required String id, required String displayName}) {
     _owner(actor);
-    _id(id);
+    _userId(id);
     _displayName(displayName);
     final previous = state._bots[id];
     if (previous != null) {
@@ -456,7 +463,7 @@ final class ChatService {
     };
     final retry = _retry(actor, 'space.create', idempotencyKey, payload);
     if (retry != null) return SpaceRecord.fromJson(retry);
-    _id(id);
+    _userId(id, label: 'space id');
     _id(title, 'title');
     _require(!state._spaces.containsKey(id), 'conflict', '空间编号已存在');
     _quota(state._spaces.length, state.config.maxSpaces, '社区空间');
@@ -505,7 +512,7 @@ final class ChatService {
   }
 
   void _newRoomId(String id) {
-    _id(id);
+    _userId(id, label: 'room id', max: 240, room: true);
     _require(
         !state._rooms.containsKey(id) &&
             !state._conversations.containsKey(id) &&

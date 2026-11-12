@@ -22,6 +22,23 @@ String _id(String value, [String label = 'id']) {
   return value;
 }
 
+/// 用户给定标识与内部协议scope分离；冒号专留control/feed和生成事件命名空间。
+void _userId(String value,
+    {String label = 'id', int max = 128, bool room = false}) {
+  _require(
+      value.isNotEmpty &&
+          value.length <= max &&
+          RegExp(room
+                  ? r'^[A-Za-z0-9][A-Za-z0-9_.#-]*$'
+                  : r'^[A-Za-z0-9][A-Za-z0-9_.-]*$')
+              .hasMatch(value),
+      'bad_request',
+      '$label 必须为1–$max位安全标识（英文字母、数字、_ . # -），冒号/空白/控制字符/路径分隔符保留或禁止');
+  if (room)
+    _require(!value.contains('#shadow'), 'bad_request',
+        'room id 的 #shadow 子命名空间由系统保留');
+}
+
 void _displayName(String value) {
   _id(value, 'displayName');
   _require(

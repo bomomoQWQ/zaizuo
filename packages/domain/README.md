@@ -13,7 +13,7 @@ dart analyze
 dart test --reporter expanded
 ```
 
-便携 SDK 不要求写入系统 PATH。本次验证使用 Dart 3.14.0，`dart analyze` 无问题、60 项单元测试通过（覆盖率产物不作为授权或生产安全证明）；若宿主用户配置目录不可写，可在**当前子进程**设置 `PUB_CACHE`、`TEMP`、`TMP`、`APPDATA`、`LOCALAPPDATA` 到项目 `.local/`，并设置 `DART_SUPPRESS_ANALYTICS=true`，不修改系统 ACL。
+便携 SDK 不要求写入系统 PATH。本次验证使用 Dart 3.14.0，`dart analyze` 无问题、61 项单元测试通过（覆盖率产物不作为授权或生产安全证明）；若宿主用户配置目录不可写，可在**当前子进程**设置 `PUB_CACHE`、`TEMP`、`TMP`、`APPDATA`、`LOCALAPPDATA` 到项目 `.local/`，并设置 `DART_SUPPRESS_ANALYTICS=true`，不修改系统 ACL。
 
 ## 快速示例
 
@@ -58,7 +58,7 @@ void main() {
 - `Actor` 有不可变 `id / ownerId / isBot`。所有非引导操作都要求 `Actor actor`，并验证它由**当前 `ChatService.actor(id)`** 产生、主体存在且当前已入驻、类型与 owner 匹配。
 - `Actor(...)` 公开构造器只用于展示/传值，**不能用来写业务或查询内容**；伪造已存在主账户编号也会得到 `forbidden`。其他 service 的句柄同样不可用。
 - `actor(id)` 本身是**可信调用边界的身份解析器，不是密码验证器**。OneBot/运行时须先校验本地凭据、将 token 固定绑定到允许的 bot，再调用它；绝不能把网络请求自报的 `self / ownerId / principalId` 无检查传入。domain 不持有密码、签名私钥或网络令牌。
-- `registerAccount` 遵循实施契约，没有 `Actor` 参数，是可信的注册/引导入口；外层不得把它当作任意远端无鉴权管理接口。账号名先 trim + 小写，再检查 `^[a-z0-9_]{1,14}$`，大小写不敏感且不可复用；人和 bot 的显示名均非空并少于 15 个 Unicode 字素（组合字符、家庭 emoji 按显示字符计算）。ID 为非空字符串，不从昵称授权，不强制十六进制。
+- `registerAccount` 遵循实施契约，没有 `Actor` 参数，是可信的注册/引导入口；外层不得把它当作任意远端无鉴权管理接口。账号名先 trim + 小写，再检查 `^[a-z0-9_]{1,14}$`，大小写不敏感且不可复用；人和 bot 的显示名均非空并少于 15 个 Unicode 字素（组合字符、家庭 emoji 按显示字符计算）。用户principal/space ID为1–128位ASCII安全标识：字母或数字首位，后续允许字母数字、`_ . -`；room/defaultRoom ID最多240位、可额外含`#`但禁用`#shadow`系统子命名空间。冒号、空白、控制字符、路径分隔符不允许，从而保留`control:`/`feed:`和内部生成ID命名空间；不从昵称授权，不强制十六进制。
 - 建议构造 `ChatState(communityOwnerId: 已钉住的社区owner)`。显式设置时首个账户必须匹配。未配置时将首个登记账户作为原型社区配置管理员；这不代替社区信任根。
 - `ChatState` 的只读 maps 与 `events` 是**可信本地存储/投影接口**，不包含逐调用者过滤。它们不是可直接暴露给 bot 的 HTTP 响应；内容读取应使用 service 的成员检查查询。
 - **`toJson/fromJson` 不是已签名认证，也不是网络事件授权入口。** `fromJson` 回放可信本地快照并做结构/引用/不变量校验，不重新验签，也不证明历史命令当时有权限。跨设备必须先由外层验签、授权、确定归并顺序并重放原始公开命令，不能接受对方发来的任意 state patch。
