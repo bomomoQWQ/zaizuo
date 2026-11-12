@@ -1,0 +1,13 @@
+.local/
+.dart_tool/
+.packages
+build/
+dist/
+coverage/
+*.exe
+*.test
+.env
+.env.*
+!.env.example
+*.key
+*.pem
