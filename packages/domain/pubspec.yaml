@@ -1,0 +1,10 @@
+name: zaizuo_domain
+description: 在座的独立纯 Dart 业务状态机；不含传输、密码学或界面。
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+dependencies:
+  characters: ^1.4.0
+dev_dependencies:
+  test: ^1.25.15
