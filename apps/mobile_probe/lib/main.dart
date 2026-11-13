@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'probe_service.dart';
+import 'project_licenses.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -139,6 +140,8 @@ class _MobileProbeState extends State<MobileProbe> {
                 const Text(
                   '非正式 UI / 非完整 IM / 无实际 Git 或跨机通信\n仅测试资料；不要导入真实账户或敏感照片。',
                 ),
+                const SizedBox(height: 12),
+                const ProjectLicensePanel(),
                 const SizedBox(height: 12),
                 Text(environment),
                 const SizedBox(height: 12),

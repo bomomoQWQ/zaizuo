@@ -1,6 +1,6 @@
 name: zaizuo_mobile_probe
 description: 在座 Android 安装与本机图片加密往返验证壳，非正式 IM。
-version: 0.1.0+1
+version: 0.1.0+2
 publish_to: none
 
 environment:
@@ -21,3 +21,5 @@ dev_dependencies:
 flutter:
   assets:
     - assets/probe.png
+    - assets/licenses/AGPL-3.0-only.txt
+    - assets/licenses/NOTICE.txt

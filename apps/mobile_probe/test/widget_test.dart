@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zaizuo_mobile_probe/main.dart';
 import 'package:zaizuo_mobile_probe/probe_service.dart';
+import 'package:zaizuo_mobile_probe/project_licenses.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -30,6 +32,83 @@ void main() {
     expect(find.textContaining('非完整 IM'), findsOneWidget);
     expect(find.textContaining('未配置 Git'), findsOneWidget);
     expect(find.textContaining('内置 PNG'), findsOneWidget);
+  });
+
+  test('内置AGPL/NOTICE资产逐字节匹配根原文且保留第三方notices', () async {
+    for (final pair in [
+      (projectLicenseAsset, '../../LICENSE'),
+      (projectNoticeAsset, '../../NOTICE'),
+    ]) {
+      final bytes = await rootBundle.load(pair.$1);
+      expect(
+        bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
+        orderedEquals(await File(pair.$2).readAsBytes()),
+      );
+    }
+    final license = await rootBundle.loadString(projectLicenseAsset);
+    final notice = await rootBundle.loadString(projectNoticeAsset);
+    expect(license, contains('GNU AFFERO GENERAL PUBLIC LICENSE'));
+    expect(license, contains('15. Disclaimer of Warranty.'));
+    expect(license, contains('END OF TERMS AND CONDITIONS'));
+    expect(notice, contains('SPDX-License-Identifier: AGPL-3.0-only'));
+    expect(notice, contains('retain their respective licenses'));
+    final upstream = await rootBundle.load('NOTICES.Z');
+    expect(upstream.lengthInBytes, greaterThan(0));
+    final thirdParty = utf8.decode(
+      gzip.decode(
+        upstream.buffer.asUint8List(
+          upstream.offsetInBytes,
+          upstream.lengthInBytes,
+        ),
+      ),
+    );
+    expect(thirdParty, contains('cryptography'));
+    expect(thirdParty, contains('The Flutter Authors'));
+    expect(
+      thirdParty,
+      contains('Redistribution and use in source and binary forms'),
+    );
+    expect(
+      projectSourceUrl,
+      'https://github.com/bomomoQWQ/zaizuo/tree/v0.1.0-media-test3',
+    );
+  });
+
+  testWidgets('许可入口离线展示完整AGPL和NOTICE及test3源码地址', (tester) async {
+    const channel = MethodChannel('zaizuo.mobile_probe/native');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async => null);
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    await tester.pumpWidget(const MobileProbe());
+    await tester.pumpAndSettle();
+    final entry = find.text('关于 / 许可与对应源码');
+    await tester.ensureVisible(entry);
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    expect(find.text(projectSourceUrl), findsOneWidget);
+    expect(find.textContaining('不提供任何保证'), findsOneWidget);
+    expect(find.textContaining('保留各自原始许可'), findsOneWidget);
+    for (final pair in [
+      ('查看项目 LICENSE（AGPL-3.0-only）', projectLicenseAsset),
+      ('查看项目 NOTICE', projectNoticeAsset),
+    ]) {
+      // rootBundle performs real I/O; do not await it inside FakeAsync.
+      final original = await tester.runAsync(
+        () => rootBundle.loadString(pair.$2),
+      );
+      final control = find.text(pair.$1);
+      await tester.ensureVisible(control);
+      await tester.runAsync(() => tester.tap(control));
+      await tester.pumpAndSettle();
+      expect(find.text(original!), findsOneWidget);
+    }
+    expect(find.text('复制对应源码地址（不联网）'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    // The license panel remains independent of the unavailable native service.
+    expect(find.byType(ProjectLicensePanel), findsOneWidget);
   });
 
   test('实际fixture纯Dart WebP压缩+密文落盘+解密往返且可重新打开测试profile', () async {

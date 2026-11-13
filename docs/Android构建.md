@@ -39,7 +39,7 @@ Gradle9.5越过DSL错误后曾明确要求尚未配置的 **NDK28.2.13676358（r
 
 [android.ps1](../tools/package/android.ps1) 准备/检查 F 盘独立路径、锁定现有许可组件、pub/analyze/test、仅构建 debug APK，输出 SHA-256，最后恢复进程环境并检查父 Dart exe 未变化。**脚本是否能在当前宿主执行取决于策略；不要修改 ExecutionPolicy 或通过换壳绕过拒绝。** 本轮宿主 AuthorizationManager 拒绝脚本，已记录；语法解析单独检查通过。
 
-脚本参数包含 `-PrepareSdk`（仅拷原来已安装的SDK34基础组件/许可，不下载新增依赖）、`-Target android-arm64|android-x64`、`-Version`（默认0.1.0）、`-WorkspaceRoot`（可显式传入批准的 ASCII 路径）、`-SkipTests`。预检查要求隔离SDK已具有platform36、build-tools36和NDK28.2.13676358；缺失时明确报错并停止，不由脚本安装。脚本不安装Flutter、不接受许可、不改系统PATH、共享SDK或防火墙。
+脚本参数包含 `-PrepareSdk`（仅拷已经安装的SDK36/build-tools36/NDK28.2和许可，不下载新增依赖）、`-Target android-arm64|android-x64`、`-Version`（默认0.1.0-media-test3）、`-WorkspaceRoot`（可显式传入批准的 ASCII 路径）、`-SkipTests`。预检查要求隔离SDK已具有platform36、build-tools36和NDK28.2.13676358；缺失时明确报错并停止，不由脚本安装。脚本不安装Flutter、不接受许可、不改系统PATH、共享SDK或防火墙。
 
 可在正常允许脚本的本机执行：
 
@@ -86,13 +86,23 @@ $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 - [原始arm64 debug/internal APK（本机历史）](../dist/packages/zaizuo-mobile-probe-0.1.0-android-arm64-debug.apk)
 - [原始SHA-256（本机历史）](../dist/packages/zaizuo-mobile-probe-0.1.0-android-arm64-debug.apk.sha256)
 
-原构建产物位于应用目录 `build/app/outputs/flutter-apk/app-debug.apk`；最终分发文件与原文件 SHA-256 精确一致。构建脚本统一输出到 `dist/packages/`，默认版本0.1.0，不覆盖已有同名交付。
+原构建产物位于应用目录 `build/app/outputs/flutter-apk/app-debug.apk`；最终分发文件与原文件 SHA-256 精确一致。构建脚本统一输出到 `dist/packages/`，默认版本0.1.0-media-test3，不覆盖已有同名交付；许可资产必须与根LICENSE/NOTICE逐字节匹配，版本源码URL必须与包标签一致。
 
 这是 Android 自动 debug/internal 签名，不是正式发行签名、没有 Play 签名/升级链承诺。真机安装需用户自行明确允许内部测试包，可用受信 ADB `adb install -r <APK>` 或手工打开 APK；本轮不替用户启用开发者选项/USB调试，不改手机安全设置，不自动安装到用户设备。
 
 验收顺序：安装→启动确认“非完整 IM / Android Git未实现”→初始化测试 profile→内置 fixture PASS→系统选择无敏感图片 PASS→退出再开→卸载清除。还需 Android 版本、arm64/x64、选择器取消/Activity重建、低内存/耗时、恶意provider等独立验收。
 
-## 本轮产物核验（APK已构建；未做真机安装/启动验收）
+## 当前test3许可版APK（未做真机安装/启动验收）
+
+- [test3 arm64 debug APK](https://github.com/bomomoQWQ/zaizuo/releases/download/v0.1.0-media-test3/zaizuo-mobile-probe-0.1.0-media-test3-android-arm64-debug.apk) · [SHA-256](https://github.com/bomomoQWQ/zaizuo/releases/download/v0.1.0-media-test3/zaizuo-mobile-probe-0.1.0-media-test3-android-arm64-debug.apk.sha256)
+- 大小 **74,221,969 bytes**；SHA-256 `5389218664562b9b90aba0b8d09a289e95c4cdeefee8b0ed47c6b8375013898e`。
+- versionName `0.1.0` / versionCode **2**；包名仍为 `dev.zaizuo.zaizuo_mobile_probe`，min24 / target34 / compile36，仅arm64-v8a。
+- 最终APK实物经 `aapt2`、merged manifest、`apksigner verify` 核对：v2单签名通过，Android Debug RSA2048，证书与下方历史记录相同；没有网络/存储/相机权限，备份和明文网络关闭，调试属性开启。未在手机或模拟器安装/启动。
+- ZIP共146项；完整AGPL许可34,020 bytes与NOTICE1,656 bytes分别与根文件逐字节一致。原始 `NOTICES.Z` 保留Flutter及第三方声明，没有将第三方改为项目AGPL许可。
+- 页面“关于 / 许可与对应源码”离线显示完整AGPL/NOTICE、无担保和test3源码URL；第三方通过Flutter原始LicenseRegistry展示。新增两项许可回归与原有三项编码/资料测试，合计 **5/5通过**，分析无问题。
+- 这次确实重新构建APK，固定Flutter3.50/Dart3.14、Gradle9.5、AGP9.1.1、SDK36和NDK28.2，没有跳过依赖校验或新增许可接受记录。原中文路径的impellerc问题按前述方法使用临时ASCII别名；不修改ACL或执行策略。
+
+## 最初versionCode1产物核验（本机历史，非当前下载）
 
 以下来自**最终APK实物**的只读 `aapt2 dump badging/permissions/xmltree`、`apksigner verify --verbose --print-certs`、ZIP目录及SHA-256检查，不是根据源码推断：
 
