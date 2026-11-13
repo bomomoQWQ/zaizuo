@@ -2,7 +2,7 @@
 
 对机器人友好的独立聊天软件。目标客户端为 **Flutter：Linux / Windows / Android**；目前已经实现并测试的是 **非界面 Dart 原型、OneBot 11/12、Go 独立 / Dart 可嵌入双中继**，不是 QQ 桥接器，也不是 NapCat 插件。
 
-**可跨电脑运行，不等于已经生产就绪。** Windows 与 Ubuntu 已用独立账号经真实 SSH/Git 完成双向文件及透明图片往返；Windows 便携 CLI、Linux 原生便携包和 `.deb` 已实际编译及解包运行。没有正式 Flutter IM 页面；Android arm64 debug APK 已生成并验签，但仅最小本机媒体验证壳，未真机安装、不冒充完整手机端。项目许可证待维护者决定，仅内部测试，不自动创建 GitHub 远端或推送。
+**可跨电脑运行，不等于已经生产就绪。** Windows 与 Ubuntu 已用独立账号经真实 SSH/Git 完成双向文件及透明图片往返；Windows 便携 CLI、Linux 原生便携包和 `.deb` 已实际编译及解包运行。没有正式 Flutter IM 页面；Android arm64 debug APK 已生成并验签，但仅最小本机媒体验证壳，未真机安装、不冒充完整手机端。项目许可证待维护者决定；源码已按维护者授权公开托管，测试包仅以预发布形式提供，不等于生产就绪或自动授予开源许可证。
 
 ## 已经有的代码
 
@@ -16,6 +16,12 @@
 | [应用协调与命令行](<packages/runtime/README.md>) | 账号初始化/入驻、持续 Git 同步、会话期次密钥分发、可选中继加速、机器人服务、加密重放 | 所有写入先本机持久化，再向外回成功；仍为原型 |
 
 **项目正式名：在座；代码/平台标识：`zaizuo`；OneBot 扩展前缀：`zaizuo.`。**
+
+## 代码、下载与换设备开发
+
+- [GitHub 源码仓库](<https://github.com/bomomoQWQ/zaizuo>)，默认分支 `main`。
+- [测试包预发布下载](<https://github.com/bomomoQWQ/zaizuo/releases/tag/v0.1.0-media-test2>)：Windows便携ZIP、Linux便携包/DEB、Android arm64验证壳APK与SHA-256清单。不是完整图形聊天客户端，Android未真机验收。
+- [换设备继续开发](<docs/换设备开发.md>)：克隆、工具链、依赖安装和不随代码同步的私密资料。
 
 ## 快速入口
 

@@ -81,8 +81,8 @@ $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 
 本轮已实际构建成功（`flutter build apk --debug --target-platform android-arm64 --no-pub`，exit0），并复制核对最终产物：
 
-- [Android arm64 debug/internal APK](../dist/packages/zaizuo-mobile-probe-0.1.0-android-arm64-debug.apk)
-- [SHA-256 校验文件](../dist/packages/zaizuo-mobile-probe-0.1.0-android-arm64-debug.apk.sha256)
+- [Android arm64 debug/internal APK](https://github.com/bomomoQWQ/zaizuo/releases/download/v0.1.0-media-test2/zaizuo-mobile-probe-0.1.0-android-arm64-debug.apk)
+- [SHA-256 校验文件](https://github.com/bomomoQWQ/zaizuo/releases/download/v0.1.0-media-test2/zaizuo-mobile-probe-0.1.0-android-arm64-debug.apk.sha256)
 
 原构建产物位于应用目录 `build/app/outputs/flutter-apk/app-debug.apk`；最终分发文件与原文件 SHA-256 精确一致。构建脚本统一输出到 `dist/packages/`，默认版本0.1.0，不覆盖已有同名交付。
 
