@@ -160,6 +160,11 @@ Future<void> main(List<String> args) async {
           }
         final own = await node.media.upload(
             actorId: actor.id, name: 'ubuntu-reply.bin', bytes: originalFile());
+        final ownImage = await node.media.upload(
+            actorId: actor.id,
+            name: 'ubuntu-transparent-reply.png',
+            bytes: img.encodePng(originalImage()),
+            purpose: 'image');
         await node.execute(operation: 'message.send', params: {
           'conversation': room,
           'parts': [
@@ -170,6 +175,10 @@ Future<void> main(List<String> args) async {
             {
               'type': 'file',
               'data': {'file_id': own['file_id']}
+            },
+            {
+              'type': 'image',
+              'data': {'file_id': ownImage['file_id']}
             }
           ]
         });
@@ -190,8 +199,11 @@ Future<void> main(List<String> args) async {
             node.replica.service.actor(profile.identity.public.accountId);
         final message = node.replica.service
             .messages(actor: actor, conversationId: room)
-            .firstWhere((m) => m.parts.any((q) =>
-                q['type'] == 'text' && q['data']['text'] == 'Ubuntu→Windows'));
+            .firstWhere((m) =>
+                m.parts.any((q) =>
+                    q['type'] == 'text' &&
+                    q['data']['text'] == 'Ubuntu→Windows') &&
+                m.parts.any((q) => q['type'] == 'image'));
         final projected =
             await node.media.project(actorId: actor.id, message: message);
         final downloaded = await node.media.get(
@@ -202,10 +214,35 @@ Future<void> main(List<String> args) async {
             await sha256Hex(base64Decode(downloaded['data'] as String)) ==
                 await sha256Hex(originalFile()),
             'Ubuntu回件不一致');
+        final returnedImage = await node.media.get(
+            actorId: actor.id,
+            fileId: projected.firstWhere((q) => q['type'] == 'image')['data']
+                ['file_id'] as String);
+        final decodedReply =
+            img.decodeWebP(base64Decode(returnedImage['data'] as String));
+        final expectedReply = originalImage();
+        check(decodedReply != null, 'Ubuntu回图不是有效WebP');
+        check(
+            decodedReply!.width == expectedReply.width &&
+                decodedReply.height == expectedReply.height,
+            'Ubuntu回图尺寸不一致');
+        for (var y = 0; y < expectedReply.height; y++) {
+          for (var x = 0; x < expectedReply.width; x++) {
+            final expected = expectedReply.getPixel(x, y);
+            final actual = decodedReply.getPixel(x, y);
+            check(
+                expected.r == actual.r &&
+                    expected.g == actual.g &&
+                    expected.b == actual.b &&
+                    expected.a == actual.a,
+                'Ubuntu回图RGBA不一致');
+          }
+        }
         check(node.replica.rejected.isEmpty, 'Windows存在被拒命令');
         stdout.writeln(jsonEncode({
           'stage': stage,
           'ok': true,
+          'reply_image': '48x32 rgba lossless',
           'download_hash':
               await sha256Hex(base64Decode(downloaded['data'] as String)),
           'rejected': 0

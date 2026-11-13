@@ -47,7 +47,7 @@ final bytes = base64Decode(loaded['data'] as String);
 
 ## 暂存、范围和 Git
 
-- 上传字节用独立随机 stage key 加密；stage key/句柄索引在本机签名加密的 `media-state.enc`，暂存 `.bin` 只有密文。资料目录权限仍需宿主管理，不能整目录 git add。
+- 上传字节用独立随机 stage key 加密；stage key/句柄索引在本机AEAD加密的 `media-state.enc`，暂存 `.bin` 只有密文。资料目录权限仍需宿主管理，不能整目录 git add。
 - 发送时将暂存内容或已授权原消息附件解密，再用目的 scope/当前 epoch 重新加密；得到新的随机 nonce 和密文对象号。相同文件从群聊转发到独立私密范围不能复用原 ciphertext object，避免跨范围关联和错误沿用原 key。
 - 原 `file_id`、stage key、`stage:` scope 不进入发送的签名命令参数。签名加密的内容事件只带 `AttachmentRef {scope, epoch, descriptor}`，descriptor 包含密文对象号、原文件名/MIME/大小、明文摘要、nonce/tag；这些描述放在加密正文内，不公开写入 Git 附件分支。
 - Git 附件分支为 `refs/heads/attachment/<密文SHA256>`，tree 仅 `object.bin`；附件的钥匙、原文件名和明文描述不在其中。`GitSync` 按需 fetch 精确对象，校验普通 blob、大小和 SHA-256，不 checkout。
@@ -79,4 +79,14 @@ dart test test/media_test.dart --reporter expanded --concurrency 1
 3. 离群后不获得新附件 epoch 的 key，也重放不出新消息；原来合法接收的旧历史附件仍可延后下载。
 4. 论坛附件和 private feed 使用同一管线、不同scope密文对象；另一个账户拒绝 private feed 投影和句柄读取。
 
-测试结果由实际运行回执补充；未通过或受并行实现阻断的项目不得在交接中宣称已验收。所有范围仅覆盖本机 prototype，真正跨电脑、弱网、Android后台、跨平台安装包、断电/磁盘故障、所有 OneBot 客户端兼容性需单独验收。
+本轮最终冻结源码验证：Dart 3.14.0 / Git for Windows 2.55.0，4/4 全部通过（串行约 8 分钟），测试文件 format 无改动、analyze 无问题。首次并行实施期间曾因 OneBot 中间态括号导致无法 load，后已修复；首次完整运行离群 case 还曾出现一次 Git ls-remote 退出 128，未放宽断言，冻结后单 case 重跑及完整 4 项重跑均通过、未复现。失败时该 case 保留自建临时 fixture 以便定位，成功正常回收；不把不明错误当作成功。
+
+本文件这四项测试只覆盖本机 prototype；Windows/Ubuntu真实SSH双机及分发包的另行验证见[本轮验收](../../docs/图片文件与跨平台验收.md)。弱网、Android后台、断电/磁盘故障、所有OneBot客户端兼容性仍需单独验收。
+
+## 资源与失败边界
+
+- 默认每文件8MiB、索引句柄4096、加密暂存128MiB、本机密文缓存总量256MiB，Git单对象硬上限20MiB；超限拒绝，不自动删除旧历史。
+- 发送失败或磁盘保存失败可能保留已加密但未被引用的对象；总缓存扫描会计入它们，不能宣称失败完全不落盘或具备断电原子恢复。未提供自动历史回收工具，不建议手工删未知文件/信任pin。
+- 同一MediaRepository会话只缓存已确认成功发布的object ID，以避免每轮重复SSH；重开会重新校验历史outbox，没有把仅尝试过的失败上传记成成功。它不是远端文件永久存在的保证，已知远端删除/改写仍按Git信任规则拒绝。
+- 无history.read的post-only bot发送媒体后，其回执投影可能因不具备原消息读取资格而失败；不以放宽下载权限修复此限制。
+- `media-state.enc`为本机AEAD加密索引（使用资料存储key）；不是Git分享内容。大于1MiB且小于6MiB的合法索引有保存重开回归；目录仍属于可信本机用户，不是同用户恶意文件系统沙箱。
