@@ -1,0 +1,17 @@
+pluginManagement {
+    def properties = new Properties()
+    file('local.properties').withInputStream { properties.load(it) }
+    def flutterSdk = properties.getProperty('flutter.sdk')
+    if (flutterSdk == null) throw new GradleException('flutter.sdk missing')
+    includeBuild("$flutterSdk/packages/flutter_tools/gradle")
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+plugins {
+    id 'dev.flutter.flutter-plugin-loader' version '1.0.0'
+    id 'com.android.application' version '9.1.1' apply false
+}
+include ':app'

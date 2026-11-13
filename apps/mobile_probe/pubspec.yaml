@@ -1,0 +1,23 @@
+name: zaizuo_mobile_probe
+description: 在座 Android 安装与本机图片加密往返验证壳，非正式 IM。
+version: 0.1.0+1
+publish_to: none
+
+environment:
+  sdk: '>=3.14.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  zaizuo_core:
+    path: ../../packages/core
+  zaizuo_runtime:
+    path: ../../packages/runtime
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  assets:
+    - assets/probe.png

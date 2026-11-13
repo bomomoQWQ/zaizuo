@@ -1,0 +1,25 @@
+plugins {
+    id 'com.android.application'
+    id 'dev.flutter.flutter-gradle-plugin'
+}
+android {
+    namespace 'dev.zaizuo.zaizuo_mobile_probe'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+    ndkVersion '28.2.13676358'
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    defaultConfig {
+        applicationId 'dev.zaizuo.zaizuo_mobile_probe'
+        minSdk 24
+        targetSdk 34
+        versionCode flutter.versionCode
+        versionName flutter.versionName
+    }
+    // Only debug/internal packaging; no release credentials or production key.
+}
+flutter {
+    source '../..'
+}

@@ -20,7 +20,7 @@ foreach($package in @('core','domain','relay_dart','onebot','runtime')){
     Invoke-Checked $DartExe (@('format','--output=none','--set-exit-if-changed')+$targets)
     Invoke-Checked $DartExe @('analyze')
     if($SkipGitIntegration -and $package -eq 'core'){
-      Invoke-Checked $DartExe @('test','test/security_test.dart','test/attachments_test.dart','test/webp_encoder_test.dart','-r','expanded')
+      Invoke-Checked $DartExe @('test','test/security_test.dart','test/attachments_test.dart','test/image_codec_test.dart','test/webp_encoder_test.dart','-r','expanded')
     }else{Invoke-Checked $DartExe @('test','-r','expanded')}
   }finally{Pop-Location}
 }
