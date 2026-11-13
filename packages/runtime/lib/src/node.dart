@@ -7,6 +7,8 @@ import 'package:zaizuo_domain/zaizuo_domain.dart';
 import 'package:zaizuo_onebot/zaizuo_onebot.dart';
 
 import 'local_profile.dart';
+import 'media.dart';
+import 'commands.dart';
 import 'relay_client.dart';
 import 'replica.dart';
 
@@ -17,6 +19,7 @@ class ZaizuoNode {
   final FileEventStore store;
   final EncryptedReplica replica;
   final GitSync? git;
+  late final MediaRepository media;
   final Duration syncInterval;
   final Uri? relayUrl;
   final String? _relayToken;
@@ -61,6 +64,14 @@ class ZaizuoNode {
     final (store, replica) = await profile.replica();
     final node = ZaizuoNode._(profile, store, replica, git, syncInterval,
         relayUrl, relayToken, ownsGit);
+    try {
+      node.media = await MediaRepository.open(
+          profile: profile, replica: replica, git: git);
+    } catch (_) {
+      await replica.close();
+      await store.close();
+      rethrow;
+    }
     node._events = store.events.listen((event) {
       if (!node._closed && event.origin == profile.device.certificate!.id) {
         node._relayTail = node._relayTail.then((_) async {
@@ -145,6 +156,25 @@ class ZaizuoNode {
         }
         final route = conversation ??
             replica.routeFor(actor, sharedOperation, sharedParams);
+        final rawParts = sharedParams['parts'];
+        if (rawParts is List &&
+            rawParts.any((part) =>
+                part is Map && {'image', 'file'}.contains(part['type']))) {
+          final candidate =
+              ChatService(ChatState.fromJson(replica.service.state.toJson()));
+          try {
+            applyCommand(candidate, actor, sharedOperation, sharedParams);
+          } finally {
+            await candidate.close();
+          }
+          sharedParams = {
+            ...sharedParams,
+            'parts': await media.resolve(
+                actorId: actor,
+                conversationId: route,
+                parts: List<Map<String, dynamic>>.from(rawParts))
+          };
+        }
         final result = await replica.execute(
             actorId: actor,
             operation: sharedOperation,
@@ -308,6 +338,7 @@ class ZaizuoNode {
         await replica.refresh();
         await _ensureKeys();
         if (profile.trust.devices.containsKey(profile.device.certificate!.id)) {
+          await media.flushUploads();
           pushed = await repository.push(store);
         }
       } else {
@@ -315,6 +346,7 @@ class ZaizuoNode {
         await _ensureKeys();
       }
       await _persistKeys();
+      await media.flushUploads();
       await _maintainRelay();
       completedSyncs++;
       lastSyncError = null;
@@ -421,6 +453,27 @@ class ZaizuoNode {
           return MessageRecord.fromJson(
               result['result'] as Map<String, dynamic>);
         },
+        mediaUploadHandler: (
+                {required actor,
+                required name,
+                required bytes,
+                required mime,
+                required purpose}) =>
+            _serial(() => media.upload(
+                actorId: actor.id,
+                name: name,
+                bytes: bytes,
+                mime: mime,
+                purpose: purpose)),
+        mediaGetHandler: ({required actor, required fileId}) =>
+            _serial(() => media.get(actorId: actor.id, fileId: fileId)),
+        resolveMediaParts: (
+                {required actor, required conversationId, required parts}) =>
+            parts,
+        projectMediaParts: ({required actor, required message}) =>
+            media.project(actorId: actor.id, message: message),
+        mediaScope: ({required actor, required operation, required params}) =>
+            replica.routeFor(actor.id, operation, params),
         commandHandler: (operation, params) async {
           final result = await execute(
               actorId: botId, operation: operation, params: params);
@@ -429,6 +482,7 @@ class ZaizuoNode {
         });
     _projection = OneBotProjection(backend: _backend!, ids: _ids!);
     _server = OneBotServer(
+        limits: OneBotLimits.media(maxMediaBytes: media.maxMediaBytes),
         bindings: [OneBotBinding(token: token, projection: _projection!)]);
     try {
       await _server!.start(address: InternetAddress.loopbackIPv4, port: port);
@@ -586,6 +640,7 @@ class ZaizuoNode {
     await finish(() async {
       await _backend?.close();
     });
+    await finish(media.close);
     await finish(replica.close);
     await finish(store.close);
     if (_ownsGit)

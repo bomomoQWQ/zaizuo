@@ -1,6 +1,6 @@
 # 在座：非界面 runtime / CLI
 
-这是本机可运行的 Dart 原型，串起签名社区名册、每设备加密事件、Git 同步、可选哑中继与 OneBot 11/12 本机投影。**不是 Flutter 页面、QQ/微信客户端或 NapCat 插件；没有接入真实第三方平台，也没有图片下载/转码/外部附件上传链路。** 消息段 JSON 可保留 image 等类型不代表这些平台能力已完成。
+这是可运行的非界面 Dart 原型，串起签名社区名册、每设备加密事件、Git 同步、密文图片/文件按需传输、可选哑中继与 OneBot 11/12 本机投影。**不是正式 Flutter IM 页面、QQ/微信客户端或 NapCat 插件；没有接入真实第三方平台。** 当前图片/文件已由真实编码器、会话重新加密、Git附件对象、按需获取及授权解密贯通，并在Windows/Ubuntu跨机验证，不再仅保存image JSON段。
 
 ## 运行环境与秘密
 
@@ -24,6 +24,10 @@ admit <根账户目录> <请求JSON文件> [输出manifest文件]
 status <目录>
 command <目录> <操作名> <参数JSON文件> [显式加密通道]
 send <目录> <会话编号> <文本>
+send-file <目录> <会话编号> <本机文件> [MIME]
+send-image <目录> <会话编号> <本机图片>
+messages <目录> <会话编号> [数量]
+download <目录> <本机file_id> <明确输出路径>
 sync <目录> [受管同步目录 Git远端]
 serve <目录> <机器人编号> [本机端口]
 ```
@@ -37,6 +41,8 @@ serve <目录> <机器人编号> [本机端口]
 - `command ... bot.draft <参数JSON>` 是**纯本机草案**例外：参数仅 `id/display_name`，存入本机加密且签名的私密资料，不 append 事件、不走控制通道/Git/relay，也不占社区入驻配额；返回 `local_only: true`、草案 `result`，没有 `event_id`。草案 ID 不得与现有主体或其他本机草案冲突。
 - `command ... bot.admit <参数JSON>`（仅 `bot_id`）对本机草案转换为真正 `bot.register`，通过当前社区/每 owner 入驻配额和权限校验、加密事件落盘成功后才删除私密草案；失败保留草案。其他设备看不到本机草案，只能在入驻后收到公开注册事件。旧共享日志中已存在的非本机草案 admit 保持兼容，但新草案禁止进共享日志。
 - `send` 发送普通文本消息到已获授权的具体会话。需先存在会话、成员关系及合法当前期次密钥，不能用控制通道绕过私密范围。
+- `send-file` / `send-image` 读取当前用户明确选择的本机普通文件（默认最多8MiB），图片检查尺寸/像素并转为lossless WebP；暂存加密后按目的scope/epoch重新加密。有Git时先发布密文附件对象再发布消息引用；不接受机器人提供的任意URL/路径。
+- `messages` 查询当前账户可读消息，将附件投影为本机主体专用 `file_id`；配置Git时先同步。`download` 按该句柄重查原消息权限并按需获取/解密对象，只保存到用户明确输出路径，拒覆盖已有文件，不采用远端name选择路径。详见[媒体管线](<MEDIA.md>)。
 - `sync` 获取完整签名名册链，逐 revision 调用 `profile.acceptManifest`、更新相同 trust 对象和 replica seed/keys，然后拉取验签密文、重放、给当前合法接收者生成必要新 epoch/grant，最后发布本设备已落盘日志。重复同步幂等，不重写别的设备 branch。
 - `serve` 固定绑定当前账户自己的一个已授权 bot，启动环回 OneBot HTTP/WS 11/12。请求自报 owner/self 不能切换身份；bot 不继承 owner 私聊权限。聊天、论坛、朋友圈写入均经过同一个加密持久化 execute 入口，不只改内存。
 

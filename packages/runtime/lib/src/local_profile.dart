@@ -201,6 +201,43 @@ class LocalProfile {
         flush: true);
   }
 
+  /// 本机应用状态加密存储；调用者串行化同名写入，不接受网络提供的文件路径。
+  Future<Map<String, dynamic>?> readSecretState(String name) async {
+    if (name != 'media-state.enc') throw ArgumentError('未注册的本机状态名');
+    final source = file(name);
+    if (!await source.exists()) return null;
+    if (await source.length() > 9 * 1024 * 1024) throw StateError('本机状态文件过大');
+    final envelope = jsonObject(await source.readAsString());
+    final aad = utf8
+        .encode('zaizuo.local-secret.v1:${identity.public.accountId}:$name');
+    final clear = await AesGcm.with256bits().decrypt(
+        SecretBox(readBase64(envelope, 'ciphertext', max: 6 * 1024 * 1024),
+            nonce: readBase64(envelope, 'nonce', size: 12),
+            mac: Mac(readBase64(envelope, 'tag', size: 16))),
+        secretKey: SecretKey(_storageKey),
+        aad: aad);
+    return jsonObject(utf8.decode(clear));
+  }
+
+  Future<void> writeSecretState(String name, Map<String, dynamic> state) async {
+    if (name != 'media-state.enc') throw ArgumentError('未注册的本机状态名');
+    final clear = utf8.encode(canonicalJson(state));
+    if (clear.length > 6 * 1024 * 1024) throw StateError('本机状态数据过大');
+    final box = await AesGcm.with256bits().encrypt(clear,
+        secretKey: SecretKey(_storageKey),
+        aad: utf8.encode(
+            'zaizuo.local-secret.v1:${identity.public.accountId}:$name'));
+    final temporary = file('$name.new');
+    await temporary.writeAsString(
+        canonicalJson({
+          'ciphertext': base64Encode(box.cipherText),
+          'nonce': base64Encode(box.nonce),
+          'tag': base64Encode(box.mac.bytes)
+        }),
+        flush: true);
+    await temporary.rename(file(name).path);
+  }
+
   Future<void> savePrivate(
       {required ChatState seed,
       required Iterable<ConversationKey> keys}) async {

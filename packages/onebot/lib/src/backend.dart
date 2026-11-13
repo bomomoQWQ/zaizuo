@@ -113,6 +113,19 @@ abstract interface class OneBotSocialBackend {
       {required String postId, bool liked = true, String? idempotencyKey});
 }
 
+/// 附件可选能力。file_id由可信宿主按固定bot签发，不是URL、path或自报scope。
+/// 上传暂存并不等于发送；send必须在目标已确定后另做文件与会话授权。
+abstract interface class OneBotMediaBackend {
+  bool get mediaEnabled;
+  int get maxMediaBytes;
+  FutureOr<Map<String, dynamic>> uploadFile(
+      {required String name,
+      required List<int> bytes,
+      required String mime,
+      required String purpose});
+  FutureOr<Map<String, dynamic>> getFile(String fileId);
+}
+
 /// 每个实例固定绑定一个已授权 bot。实现者必须在所有查询和事件上检查读权限。
 /// 只有应用启动配置可以构造实例；请求中的 self 绝不能选择另一个实例。
 abstract interface class OneBotBackend {

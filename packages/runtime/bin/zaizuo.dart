@@ -35,6 +35,10 @@ admit <根账户目录> <请求JSON文件> [输出manifest文件]
 status <目录>
 command <目录> <操作名> <参数JSON文件> [显式加密通道]
 send <目录> <会话编号> <文本>
+send-file <目录> <会话编号> <本机文件> [MIME]
+send-image <目录> <会话编号> <本机图片>
+messages <目录> <会话编号> [数量]
+download <目录> <本机file_id> <明确输出路径>
 sync <目录> [受管同步目录 Git远端]
 serve <目录> <机器人编号> [本机端口]
 密码仅ZAIZUO_PASSWORD；OneBot令牌ZAIZUO_ONEBOT_TOKEN（至少32字节）。
@@ -81,7 +85,18 @@ OneBot成功仅表示本机加密日志落盘，不保证对端收到/写盘。'
     }
     return;
   }
-  final allowed = {'status', 'admit', 'command', 'send', 'sync', 'serve'};
+  final allowed = {
+    'status',
+    'admit',
+    'command',
+    'send',
+    'send-file',
+    'send-image',
+    'messages',
+    'download',
+    'sync',
+    'serve'
+  };
   if (!allowed.contains(args.first)) throw ArgumentError('未知命令');
   final remote = args.first == 'sync' && args.length == 4
       ? args[3]
@@ -153,6 +168,66 @@ OneBot成功仅表示本机加密日志落盘，不保证对端收到/写盘。'
           ],
         });
         stdout.writeln(jsonEncode(result));
+      case 'send-file':
+      case 'send-image':
+        final image = args.first == 'send-image';
+        if (args.length < 4 || args.length > (image ? 4 : 5))
+          throw ArgumentError('附件发送参数错误');
+        final input = File(p.absolute(args[3]));
+        if (await FileSystemEntity.type(input.path, followLinks: false) !=
+                FileSystemEntityType.file ||
+            await input.length() > node.media.maxMediaBytes)
+          throw ArgumentError('只接受本机有界普通文件');
+        final handle = await node.media.upload(
+            actorId: profile.identity.public.accountId,
+            name: p.basename(input.path),
+            bytes: await input.readAsBytes(),
+            mime: args.length == 5 ? args[4] : 'application/octet-stream',
+            purpose: image ? 'image' : 'file');
+        final result = await node.execute(operation: 'message.send', params: {
+          'conversation': args[2],
+          'parts': [
+            {
+              'type': image ? 'image' : 'file',
+              'data': {'file_id': handle['file_id']}
+            }
+          ]
+        });
+        if (git != null) await node.syncOnce();
+        stdout.writeln(jsonEncode(result));
+      case 'messages':
+        if (args.length < 3 || args.length > 4) throw ArgumentError('消息查询参数错误');
+        if (git != null) await node.syncOnce();
+        final actor =
+            node.replica.service.actor(profile.identity.public.accountId);
+        final records = node.replica.service.messages(
+            actor: actor,
+            conversationId: args[2],
+            limit: args.length == 4 ? int.parse(args[3]) : 50);
+        final projected = <Map<String, dynamic>>[];
+        for (final record in records)
+          projected.add({
+            ...record.toJson(),
+            'parts':
+                await node.media.project(actorId: actor.id, message: record)
+          });
+        stdout.writeln(jsonEncode({'messages': projected}));
+      case 'download':
+        if (args.length != 4) throw ArgumentError('附件下载参数错误');
+        final result = await node.media
+            .get(actorId: profile.identity.public.accountId, fileId: args[2]);
+        final output = File(p.absolute(args[3]));
+        if (await output.exists()) throw StateError('输出文件已存在，拒绝覆盖');
+        // 输出路径由当前用户明确指定，不使用远端name作为路径。
+        await output.create(exclusive: true);
+        await output.writeAsBytes(base64Decode(result['data'] as String),
+            flush: true);
+        stdout.writeln(jsonEncode({
+          'saved': output.path,
+          'name': result['name'],
+          'mime': result['mime'],
+          'size': result['size']
+        }));
       case 'sync':
         if (!(args.length == 2 || args.length == 4) || git == null) {
           throw ArgumentError('sync需配置Git目录和远端');

@@ -49,6 +49,21 @@ class OneBotLimits {
       this.actionTimeout = const Duration(seconds: 35),
       this.writeTimeout = const Duration(seconds: 5),
       this.pingInterval = const Duration(seconds: 30)});
+
+  /// 显式启用单文件base64传输；默认构造仍是64KiB，不隐式扩大。
+  factory OneBotLimits.media(
+      {int maxMediaBytes = 8 * 1024 * 1024,
+      int maxConnections = 8,
+      int maxHttpRequests = 2}) {
+    if (maxMediaBytes < 1) throw ArgumentError('Media size must be positive');
+    final wire = ((maxMediaBytes + 2) ~/ 3) * 4 + 65536;
+    return OneBotLimits(
+        maxBodyBytes: wire,
+        maxConnections: maxConnections,
+        maxHttpRequests: maxHttpRequests,
+        maxIncomingQueue: 2,
+        maxOutgoingQueue: 2);
+  }
   final int maxConnections;
   final int maxHttpRequests;
   final int maxHeaderBytes;
@@ -306,7 +321,18 @@ class OneBotServer {
 
   Future<void> _json(HttpRequest request, Map<String, dynamic> body) async {
     request.response.headers.contentType = ContentType.json;
-    request.response.write(jsonEncode(body));
+    final encoded = jsonEncode(body);
+    if (utf8.encode(encoded).length > limits.maxBodyBytes) {
+      request.response.write(jsonEncode({
+        'status': 'failed',
+        'retcode': 35003,
+        'data': null,
+        'message': 'Response exceeds configured transport limit',
+        'zaizuo.code': 'quota_exceeded'
+      }));
+    } else {
+      request.response.write(encoded);
+    }
     await request.response.close().timeout(limits.writeTimeout);
   }
 

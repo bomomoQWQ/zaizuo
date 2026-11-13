@@ -144,6 +144,30 @@ class EncryptedReplica {
       throw DomainException('forbidden', '内容不能复用保留的控制/朋友圈命名空间');
   }
 
+  void _verifyMediaReferences(
+      Map<String, dynamic> params, String scope, int epoch) {
+    final parts = params['parts'];
+    if (parts is! List) return;
+    for (final raw in parts) {
+      if (raw is! Map || !{'image', 'file'}.contains(raw['type'])) continue;
+      final data = raw['data'];
+      if (data is! Map ||
+          data.length != 1 ||
+          data['attachment'] is! Map<String, dynamic>)
+        throw const DomainException('bad_request', '持久媒体消息必须包含已加密附件引用');
+      final ref = data['attachment'] as Map<String, dynamic>;
+      if (ref.length != 3 ||
+          ref['scope'] != scope ||
+          ref['epoch'] != epoch ||
+          ref['descriptor'] is! Map<String, dynamic>)
+        throw const DomainException('forbidden', '附件范围/期次必须匹配外层消息');
+      final descriptor = AttachmentDescriptor.fromJson(
+          ref['descriptor'] as Map<String, dynamic>);
+      if (raw['type'] == 'image' && descriptor.mime != 'image/webp')
+        throw const DomainException('bad_request', '图片必须先转成受控WebP');
+    }
+  }
+
   String routeFor(
       String actorId, String operation, Map<String, dynamic> params) {
     switch (operation) {
@@ -264,6 +288,7 @@ class EncryptedReplica {
         try {
           _verifyActor(actorId, event.author, commandService);
           _verifyRoute(event.conversation, actorId, op, params, commandService);
+          _verifyMediaReferences(params, event.conversation, event.epoch);
           if (event.conversation != 'control:${store.trust.communityId}') {
             await keyManager.validateCurrentKey(
                 key: _key(event.conversation, event.epoch));
@@ -416,6 +441,7 @@ class EncryptedReplica {
       } finally {
         await verifier.close();
       }
+      _verifyMediaReferences(params, conversation, _latest(conversation).epoch);
       final prior = _service.state.messages.keys.toSet();
       final event = await store.append(
           device: device,

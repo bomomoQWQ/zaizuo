@@ -8,8 +8,18 @@ import 'package:path/path.dart' as p;
 
 import 'codec.dart';
 import 'crypto.dart';
+import 'image_codec.dart';
 
-/// 仓库只存密文摘要命名的对象，明文摘要放在加密消息中，不做跨会话可观察去重。
+export 'image_codec.dart';
+
+const _attachmentHardLimit = 20 * 1024 * 1024;
+final _attachmentHash = RegExp(r'^[a-f0-9]{64}$');
+bool _validAttachmentHash(String value) =>
+    value.length == 64 && _attachmentHash.hasMatch(value);
+
+/// 密文对象描述必须置于已签名、加密的会话事件中；本对象本身不是授权证明。
+/// 不加入新的scope字段以兼容v1；AES-GCM AAD仍绑定ConversationKey.context，
+/// runtime引用必须另带scope/epoch并验证事件权限。name/mime不会用作磁盘路径。
 class AttachmentDescriptor {
   final String objectId;
   final String name;
@@ -18,14 +28,30 @@ class AttachmentDescriptor {
   final String plainHash;
   final String nonce;
   final String tag;
-  AttachmentDescriptor(
-      {required this.objectId,
-      required this.name,
-      required this.mime,
-      required this.size,
-      required this.plainHash,
-      required this.nonce,
-      required this.tag});
+  AttachmentDescriptor({
+    required this.objectId,
+    required this.name,
+    required this.mime,
+    required this.size,
+    required this.plainHash,
+    required this.nonce,
+    required this.tag,
+  }) {
+    validate();
+  }
+
+  void validate() {
+    if (!_validAttachmentHash(objectId) ||
+        !_validAttachmentHash(plainHash) ||
+        size < 1 ||
+        size > _attachmentHardLimit) {
+      throw const FormatException('无效附件摘要或大小');
+    }
+    _validateAttachmentMetadata(name, mime);
+    _attachmentBase64(nonce, 12);
+    _attachmentBase64(tag, 16);
+  }
+
   Map<String, dynamic> toJson() => {
         'object_id': objectId,
         'name': name,
@@ -33,72 +59,311 @@ class AttachmentDescriptor {
         'size': size,
         'plain_hash': plainHash,
         'nonce': nonce,
-        'tag': tag
+        'tag': tag,
       };
-  factory AttachmentDescriptor.fromJson(Map<String, dynamic> value) =>
-      AttachmentDescriptor(
-          objectId: readString(value, 'object_id'),
-          name: readString(value, 'name', max: 256),
-          mime: readString(value, 'mime', max: 128),
-          size: readInt(value, 'size', max: 20 * 1024 * 1024),
-          plainHash: readString(value, 'plain_hash'),
-          nonce: readString(value, 'nonce'),
-          tag: readString(value, 'tag'));
+  factory AttachmentDescriptor.fromJson(Map<String, dynamic> value) {
+    const keys = {
+      'object_id',
+      'name',
+      'mime',
+      'size',
+      'plain_hash',
+      'nonce',
+      'tag'
+    };
+    if (value.length != keys.length || !value.keys.every(keys.contains)) {
+      throw const FormatException('附件描述含缺失或未知字段');
+    }
+    return AttachmentDescriptor(
+      objectId: readString(value, 'object_id', max: 64),
+      name: readString(value, 'name', max: 256),
+      mime: readString(value, 'mime', max: 128),
+      size: readInt(value, 'size', min: 1, max: _attachmentHardLimit),
+      plainHash: readString(value, 'plain_hash', max: 64),
+      nonce: readString(value, 'nonce', max: 16),
+      tag: readString(value, 'tag', max: 24),
+    );
+  }
 }
 
+void _validateAttachmentMetadata(String name, String mime) {
+  if (name.isEmpty ||
+      name.length > 256 ||
+      utf8.encode(name).length > 1024 ||
+      name != name.trim() ||
+      name == '.' ||
+      name == '..' ||
+      name.contains('/') ||
+      name.contains('\\') ||
+      name.contains(':') ||
+      name.endsWith('.') ||
+      name.runes.any((r) =>
+          r < 32 || r >= 0x7f && r <= 0x9f || r >= 0xd800 && r <= 0xdfff) ||
+      mime.length > 128 ||
+      !RegExp(r'^[A-Za-z0-9][A-Za-z0-9!#$&^_.+\-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+\-]*$')
+          .hasMatch(mime)) {
+    throw const FormatException('无效附件名称或MIME类型');
+  }
+}
+
+List<int> _attachmentBase64(String text, int size) {
+  try {
+    if (text.length != ((size + 2) ~/ 3) * 4) throw const FormatException();
+    final bytes = base64Decode(text);
+    if (bytes.length != size || base64Encode(bytes) != text) {
+      throw const FormatException();
+    }
+    return bytes;
+  } on FormatException {
+    throw const FormatException('无效附件nonce/tag编码');
+  }
+}
+
+Uint8List _attachmentSnapshot(List<int> bytes, int limit) {
+  if (bytes.isEmpty ||
+      bytes.length > limit ||
+      bytes.length > _attachmentHardLimit) {
+    throw ArgumentError('附件为空或超过本机上限');
+  }
+  if (bytes.any((byte) => byte < 0 || byte > 255)) {
+    throw ArgumentError('附件含无效字节');
+  }
+  return Uint8List.fromList(bytes);
+}
+
+final class _AttachmentBudget {
+  _AttachmentBudget(this.timeout);
+  final Duration timeout;
+  final Stopwatch clock = Stopwatch()..start();
+  void check() {
+    if (clock.elapsed >= timeout) throw TimeoutException('附件操作达到本机期限');
+  }
+
+  Future<T> wait<T>(Future<T> operation) {
+    final remaining = timeout - clock.elapsed;
+    return operation
+        .timeout(remaining > Duration.zero ? remaining : Duration.zero);
+  }
+}
+
+/// 只存随机加密后密文摘要命名的对象，不做明文全局去重。传输API不解密。
+/// 原子发布保证正常失败不留下半个.bin对象，不等价于断电后磁盘fsync保证。
+/// 拒绝已发现的符号链接；Dart无跨平台原子O_NOFOLLOW，不能防同用户恶意
+/// 文件系统替换，root应由宿主控制。超时不取消OS已发出的文件I/O。
 class EncryptedAttachments {
   final Directory root;
   final int maxBytes;
-  EncryptedAttachments(this.root, {this.maxBytes = 2 * 1024 * 1024}) {
-    if (maxBytes < 1 || maxBytes > 20 * 1024 * 1024)
-      throw ArgumentError('附件上限需1字节～20MiB');
+  final Duration ioTimeout;
+  EncryptedAttachments(
+    Directory root, {
+    this.maxBytes = 2 * 1024 * 1024,
+    this.ioTimeout = const Duration(seconds: 30),
+  }) : root = Directory(p.normalize(root.absolute.path)) {
+    if (maxBytes < 1 ||
+        maxBytes > _attachmentHardLimit ||
+        ioTimeout <= Duration.zero) {
+      throw ArgumentError('附件上限需1字节～20MiB且期限为正');
+    }
   }
   File _file(String id) {
-    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(id))
-      throw const FormatException('无效附件对象号');
+    if (!_validAttachmentHash(id)) throw const FormatException('无效附件对象号');
     return File(p.join(root.path, '$id.bin'));
+  }
+
+  AttachmentDescriptor _descriptor(AttachmentDescriptor descriptor) {
+    final copy = AttachmentDescriptor.fromJson(descriptor.toJson());
+    if (copy.size > maxBytes) throw StateError('附件超过本机加载上限');
+    return copy;
   }
 
   Future<AttachmentDescriptor> put(List<int> compressed, ConversationKey key,
       {required String name, required String mime}) async {
-    if (compressed.isEmpty || compressed.length > maxBytes)
-      throw ArgumentError('附件为空或超过发送上限');
-    if (name.isEmpty || name.length > 256 || mime.isEmpty || mime.length > 128)
-      throw ArgumentError('无效附件描述');
-    final box = await AesGcm.with256bits().encrypt(compressed,
+    final snapshot = _attachmentSnapshot(compressed, maxBytes);
+    _validateAttachmentMetadata(name, mime);
+    final budget = _AttachmentBudget(ioTimeout);
+    final box = await budget.wait(AesGcm.with256bits().encrypt(snapshot,
         secretKey: SecretKey(key.bytes),
-        aad: utf8.encode('zaizuo.attachment.v1:${key.context}'));
-    final id = await sha256Hex(box.cipherText);
-    await root.create(recursive: true);
-    await _file(id).writeAsBytes(box.cipherText, flush: true);
-    return AttachmentDescriptor(
+        aad: utf8.encode('zaizuo.attachment.v1:${key.context}')));
+    final id = await budget.wait(sha256Hex(box.cipherText));
+    final descriptor = AttachmentDescriptor(
         objectId: id,
         name: name,
         mime: mime,
-        size: compressed.length,
-        plainHash: await sha256Hex(compressed),
+        size: snapshot.length,
+        plainHash: await budget.wait(sha256Hex(snapshot)),
         nonce: base64Encode(box.nonce),
         tag: base64Encode(box.mac.bytes));
+    await budget.wait(_publish(descriptor, box.cipherText, budget));
+    return descriptor;
   }
 
   Future<List<int>> get(
       AttachmentDescriptor descriptor, ConversationKey key) async {
-    if (descriptor.size > maxBytes) throw StateError('附件超过本机加载上限');
-    final file = _file(descriptor.objectId);
-    if (await file.length() > maxBytes) throw StateError('密文对象过大');
-    final bytes = await file.readAsBytes();
-    if (await sha256Hex(bytes) != descriptor.objectId)
-      throw StateError('附件密文摘要不匹配');
-    final clear = await AesGcm.with256bits().decrypt(
+    final copy = _descriptor(descriptor);
+    final budget = _AttachmentBudget(ioTimeout);
+    final bytes = await budget.wait(_readCiphertext(copy, budget));
+    final clear = await budget.wait(AesGcm.with256bits().decrypt(
         SecretBox(bytes,
-            nonce: base64Decode(descriptor.nonce),
-            mac: Mac(base64Decode(descriptor.tag))),
+            nonce: _attachmentBase64(copy.nonce, 12),
+            mac: Mac(_attachmentBase64(copy.tag, 16))),
         secretKey: SecretKey(key.bytes),
-        aad: utf8.encode('zaizuo.attachment.v1:${key.context}'));
-    if (clear.length != descriptor.size ||
-        await sha256Hex(clear) != descriptor.plainHash)
+        aad: utf8.encode('zaizuo.attachment.v1:${key.context}')));
+    if (clear.length != copy.size ||
+        await budget.wait(sha256Hex(clear)) != copy.plainHash) {
       throw StateError('附件原文摘要不匹配');
-    return clear;
+    }
+    return Uint8List.fromList(clear).asUnmodifiableView();
+  }
+
+  /// 获取已验证大小和SHA-256的密文对象；不需要密钥，不返回磁盘路径。
+  Future<List<int>> exportCiphertext(AttachmentDescriptor descriptor) async {
+    final copy = _descriptor(descriptor);
+    final budget = _AttachmentBudget(ioTimeout);
+    return Uint8List.fromList(await budget.wait(_readCiphertext(copy, budget)))
+        .asUnmodifiableView();
+  }
+
+  /// 导入接收的密文快照：先大小/SHA-256校验再原子发布，无任何解密。
+  /// Hash只证明与descriptor相符，不证明发送者或会话授权；由runtime校验引用。
+  Future<void> importCiphertext(
+      AttachmentDescriptor descriptor, List<int> bytes) async {
+    final copy = _descriptor(descriptor);
+    final snapshot = _attachmentSnapshot(bytes, maxBytes);
+    if (snapshot.length != copy.size) throw StateError('附件密文大小不匹配');
+    final budget = _AttachmentBudget(ioTimeout);
+    if (await budget.wait(sha256Hex(snapshot)) != copy.objectId) {
+      throw StateError('附件密文摘要不匹配');
+    }
+    await budget.wait(_publish(copy, snapshot, budget));
+  }
+
+  Future<void> _checkRoot(_AttachmentBudget budget,
+      {bool create = false}) async {
+    await _rejectAttachmentLinks(root.path, budget);
+    if (create) await budget.wait(root.create(recursive: true));
+    await _rejectAttachmentLinks(root.path, budget);
+    if (await budget
+            .wait(FileSystemEntity.type(root.path, followLinks: false)) !=
+        FileSystemEntityType.directory) throw StateError('附件根目录无效');
+  }
+
+  Future<List<int>> _readCiphertext(
+      AttachmentDescriptor descriptor, _AttachmentBudget budget) async {
+    await _checkRoot(budget);
+    final file = _file(descriptor.objectId);
+    await _rejectAttachmentLinks(file.path, budget);
+    if (await budget
+            .wait(FileSystemEntity.type(file.path, followLinks: false)) !=
+        FileSystemEntityType.file) throw StateError('附件密文对象不存在或不是普通文件');
+    var abandoned = false;
+    final opening = file.open(mode: FileMode.read);
+    unawaited(opening.then<void>((lateHandle) async {
+      if (abandoned) {
+        try {
+          await lateHandle.close().timeout(ioTimeout);
+        } catch (_) {}
+      }
+    }, onError: (Object _) {}));
+    final RandomAccessFile handle;
+    try {
+      handle = await budget.wait(opening);
+    } catch (_) {
+      abandoned = true;
+      rethrow;
+    }
+    try {
+      if (await budget.wait(handle.length()) != descriptor.size) {
+        throw StateError('附件密文大小不匹配');
+      }
+      final builder = BytesBuilder(copy: false);
+      while (builder.length <= descriptor.size) {
+        budget.check();
+        final chunk = await budget.wait(handle
+            .read((descriptor.size + 1 - builder.length).clamp(1, 64 * 1024)));
+        if (chunk.isEmpty) break;
+        builder.add(chunk);
+      }
+      final bytes = builder.takeBytes();
+      if (bytes.length != descriptor.size ||
+          bytes.length > maxBytes ||
+          await budget.wait(sha256Hex(bytes)) != descriptor.objectId) {
+        throw StateError('附件密文大小或摘要不匹配');
+      }
+      return bytes;
+    } finally {
+      try {
+        await budget.wait(handle.close());
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _publish(AttachmentDescriptor descriptor, List<int> bytes,
+      _AttachmentBudget budget) async {
+    await _checkRoot(budget, create: true);
+    final target = _file(descriptor.objectId);
+    await _rejectAttachmentLinks(target.path, budget);
+    var type = await budget
+        .wait(FileSystemEntity.type(target.path, followLinks: false));
+    if (type == FileSystemEntityType.file) {
+      await _readCiphertext(
+          descriptor, budget); // idempotent, never overwrite corruption
+      return;
+    }
+    if (type != FileSystemEntityType.notFound) throw StateError('附件目标不是普通对象');
+    Directory? stage;
+    try {
+      var abandoned = false;
+      final creating = root.createTemp('.zaizuo-object-');
+      unawaited(creating.then<void>((lateDirectory) async {
+        if (abandoned) {
+          try {
+            await lateDirectory.delete(recursive: true).timeout(ioTimeout);
+          } catch (_) {}
+        }
+      }, onError: (Object _) {}));
+      final Directory stagingDirectory;
+      try {
+        stagingDirectory = await budget.wait(creating);
+      } catch (_) {
+        abandoned = true;
+        rethrow;
+      }
+      stage = stagingDirectory;
+      final file = File(p.join(stagingDirectory.path, 'object.tmp'));
+      await budget.wait(file.writeAsBytes(bytes, flush: true));
+      budget.check();
+      await _checkRoot(budget);
+      await _rejectAttachmentLinks(target.path, budget);
+      type = await budget
+          .wait(FileSystemEntity.type(target.path, followLinks: false));
+      if (type == FileSystemEntityType.file) {
+        await _readCiphertext(descriptor, budget);
+      } else if (type == FileSystemEntityType.notFound) {
+        budget.check();
+        await budget.wait(file.rename(target.path));
+      } else {
+        throw StateError('附件目标不是普通对象');
+      }
+    } finally {
+      if (stage != null) {
+        try {
+          await budget.wait(stage.delete(recursive: true));
+        } catch (_) {}
+      }
+    }
+  }
+}
+
+Future<void> _rejectAttachmentLinks(
+    String original, _AttachmentBudget budget) async {
+  var path = p.normalize(p.absolute(original));
+  while (true) {
+    budget.check();
+    if (await budget.wait(FileSystemEntity.type(path, followLinks: false)) ==
+        FileSystemEntityType.link) throw StateError('附件路径不接受符号链接');
+    final parent = p.dirname(path);
+    if (parent == path) break;
+    path = parent;
   }
 }
 
@@ -174,9 +439,9 @@ final class _EncoderDeadline {
 /// 文件系统/进程创建/订阅取消的底层 OS 调用不保证可撤销；返回后可能仍有
 /// 已发起的 OS 清理工作。不能承诺成功回收不可杀死的系统进程或所有临时文件。
 ///
-/// 字节上限不是像素上限：本实现尚未解析所有图像头来限制解码像素，也没有
-/// OS 内存/磁盘配额或原生解码沙箱。恶意压缩图像仍可能让 cwebp 大量分配内存；
-/// 不可把此包装器宣传为防解码炸弹或安全处理任意不可信图片的隔离器。
+/// 支持静态PNG/JPEG/WebP头尺寸与像素数预检（与实际snapshot同字节），
+/// 但不验证所有原生bitstream，也没有OS内存/磁盘配额或原生解码沙箱；
+/// 不可宣传成安全处理任意不可信图片的隔离器。跨平台优先用PreferredImageEncoder。
 class CWebpEncoder {
   final String executable;
   final bool lossless;
@@ -184,6 +449,8 @@ class CWebpEncoder {
   final int maxInputBytes;
   final int maxOutputBytes;
   final int maxDiagnosticBytes;
+  final int maxPixels;
+  final int maxDimension;
   final Duration timeout;
   final Duration cleanupTimeout;
   final TrustedEncoderProcessRunner _runner;
@@ -195,6 +462,8 @@ class CWebpEncoder {
     this.maxInputBytes = 20 * 1024 * 1024,
     int? maxOutputBytes,
     this.maxDiagnosticBytes = 64 * 1024,
+    this.maxPixels = 16 * 1024 * 1024,
+    this.maxDimension = 16383,
     this.timeout = const Duration(seconds: 30),
     this.cleanupTimeout = const Duration(seconds: 2),
     TrustedEncoderProcessRunner? trustedProcessRunner,
@@ -214,6 +483,10 @@ class CWebpEncoder {
         this.maxOutputBytes > 20 * 1024 * 1024 ||
         maxDiagnosticBytes < 1 ||
         maxDiagnosticBytes > 1024 * 1024 ||
+        maxPixels < 1 ||
+        maxPixels > 64 * 1024 * 1024 ||
+        maxDimension < 1 ||
+        maxDimension > 16383 ||
         cleanupTimeout <= Duration.zero ||
         timeout <= cleanupTimeout) {
       throw ArgumentError('编码字节上限或总期限配置无效');
@@ -251,11 +524,14 @@ class CWebpEncoder {
           _readBounded(input, maxInputBytes, deadline, cleanupTimeout),
           reserve: cleanupTimeout);
       if (bytes.isEmpty) throw StateError('图片输入为空');
+      final dimensions = readImageDimensions(bytes,
+          maxPixels: maxPixels, maxDimension: maxDimension);
       await deadline.wait(snapshot.writeAsBytes(bytes, flush: true),
           reserve: cleanupTimeout);
       final arguments = <String>[
         '-quiet',
         if (lossless) '-lossless',
+        '-exact',
         '-q',
         '$quality',
         snapshot.path,
@@ -319,6 +595,13 @@ class CWebpEncoder {
       // This is only a RIFF envelope/magic sanity check, not full WebP decode,
       // pixel validation, a security audit or evidence of lossless fidelity.
       if (!_webpContainer(encoded)) throw StateError('编码器输出不是WebP封装');
+      final outputDimensions = readImageDimensions(encoded,
+          maxPixels: maxPixels, maxDimension: maxDimension);
+      if (outputDimensions.format != 'webp' ||
+          outputDimensions.width != dimensions.width ||
+          outputDimensions.height != dimensions.height) {
+        throw StateError('编码器输出尺寸与输入不一致');
+      }
       return encoded;
     } on TimeoutException {
       throw TimeoutException('WebP编码达到本机总期限');

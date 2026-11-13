@@ -2,13 +2,18 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'package:image/image.dart' as img;
 import 'package:test/test.dart';
 import 'package:zaizuo_core/zaizuo_core.dart';
 
-// A tiny RIFF/WEBP container fixture, NOT a decoded/encoded image. These tests
-// verify the wrapper's lifecycle and byte limits; no real cwebp runs here.
-const _webp = <int>[82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80];
-const _guard = Duration(seconds: 3);
+// Real small PNG/WebP fixtures from the pinned pure Dart codec. The native
+// cwebp process remains a controlled fake here; PreferredImageEncoder tests
+// separately verify actual codec roundtrips and RGBA fidelity.
+final _fixture = img.Image(width: 1, height: 1, numChannels: 4)
+  ..setPixelRgba(0, 0, 17, 34, 51, 0);
+final _png = img.encodePng(_fixture);
+final _webp = img.encodeWebP(_fixture, exact: true);
+const _guard = Duration(seconds: 8);
 
 typedef _Launch = Future<EncoderProcessHandle> Function(
     String executable, List<String> arguments);
@@ -129,8 +134,8 @@ void main() {
   late File input;
   setUp(() async {
     root = await Directory.systemTemp.createTemp('zaizuo-webp-test-');
-    input = await File(p.join(root.path, 'source image.png'))
-        .writeAsBytes([1, 2, 3, 4]);
+    input =
+        await File(p.join(root.path, 'source image.png')).writeAsBytes(_png);
   });
   tearDown(() async {
     if (await root.exists()) await root.delete(recursive: true);
@@ -184,9 +189,9 @@ void main() {
       final snapshot = _snapshot(arguments);
       expect(snapshot.absolute.path, isNot(input.absolute.path));
       tempPath = snapshot.parent.path;
-      expect(await snapshot.readAsBytes(), [1, 2, 3, 4]);
+      expect(await snapshot.readAsBytes(), _png);
       await input.writeAsBytes([99]);
-      expect(await snapshot.readAsBytes(), [1, 2, 3, 4]);
+      expect(await snapshot.readAsBytes(), _png);
       await _output(arguments).writeAsBytes(_webp);
       process.exit(0);
       return process;
@@ -205,6 +210,25 @@ void main() {
     await input.writeAsBytes([]);
     await expectLater(encoder(runner).encode(input), throwsStateError);
     expect(runner.starts, 0);
+  });
+
+  test('native启动前也限制PNG像素并拒绝损坏/未知头', () async {
+    final runner = _Runner((_, __) async => throw StateError('must not start'));
+    await expectLater(
+        CWebpEncoder(
+                executable: Platform.resolvedExecutable,
+                trustedProcessRunner: runner,
+                maxPixels: 1,
+                maxDimension: 1)
+            .encode(input),
+        throwsStateError); // fake runner after valid 1x1
+    final oversized = List<int>.from(_png);
+    oversized[16] = 0x7f;
+    await input.writeAsBytes(oversized);
+    await expectLater(encoder(runner).encode(input), throwsFormatException);
+    await input.writeAsBytes([1, 2, 3]);
+    await expectLater(encoder(runner).encode(input), throwsFormatException);
+    expect(runner.starts, 1); // only the original valid PNG reached runner
   });
 
   test('拒绝symlink路径（平台允许创建时）', () async {
@@ -276,21 +300,24 @@ void main() {
 
   test('退出后子进程管道永不结束也受同一总期限限制', () async {
     final process = _Process(closeOnKill: false);
+    final entered = Completer<void>();
     late String tempPath;
     final runner = _Runner((_, arguments) async {
       tempPath = _snapshot(arguments).parent.path;
       await _output(arguments).writeAsBytes(_webp);
       process.exit(0, closePipes: false);
+      entered.complete();
       return process;
     });
     final watch = Stopwatch()..start();
-    await expectLater(
-            encoder(runner,
-                    timeout: const Duration(milliseconds: 200),
-                    cleanup: const Duration(milliseconds: 50))
-                .encode(input),
-            throwsA(isA<TimeoutException>()))
-        .timeout(_guard);
+    final result = expectLater(
+        encoder(runner,
+                timeout: const Duration(seconds: 2),
+                cleanup: const Duration(milliseconds: 200))
+            .encode(input),
+        throwsA(isA<TimeoutException>()));
+    await entered.future.timeout(_guard);
+    await result.timeout(_guard);
     expect(watch.elapsed, lessThan(_guard));
     expect(process.stdoutCancels, 1);
     expect(process.stderrCancels, 1);
@@ -299,15 +326,20 @@ void main() {
 
   test('kill失败、exitCode与cancel永久挂起不能超时后无界await', () async {
     final process = _UncooperativeProcess();
-    final runner = _Runner((_, __) async => process);
+    final entered = Completer<void>();
+    final runner = _Runner((_, __) async {
+      entered.complete();
+      return process;
+    });
     final watch = Stopwatch()..start();
-    await expectLater(
-            encoder(runner,
-                    timeout: const Duration(milliseconds: 200),
-                    cleanup: const Duration(milliseconds: 50))
-                .encode(input),
-            throwsA(isA<TimeoutException>()))
-        .timeout(_guard);
+    final result = expectLater(
+        encoder(runner,
+                timeout: const Duration(seconds: 2),
+                cleanup: const Duration(milliseconds: 200))
+            .encode(input),
+        throwsA(isA<TimeoutException>()));
+    await entered.future.timeout(_guard); // prove this case actually launched
+    await result.timeout(_guard);
     expect(watch.elapsed, lessThan(_guard));
     expect(process.kills, greaterThanOrEqualTo(1));
     expect(process.cancellations, 2);
@@ -321,8 +353,8 @@ void main() {
       return launched.future;
     });
     final operation = encoder(runner,
-            timeout: const Duration(milliseconds: 200),
-            cleanup: const Duration(milliseconds: 50))
+            timeout: const Duration(seconds: 2),
+            cleanup: const Duration(milliseconds: 200))
         .encode(input);
     final result = expectLater(operation, throwsA(isA<TimeoutException>()));
     await entered.future.timeout(_guard);

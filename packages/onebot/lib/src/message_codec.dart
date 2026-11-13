@@ -1,5 +1,6 @@
 import 'backend.dart';
 import 'id_map.dart';
+import 'media.dart';
 
 /// CQ 转义必须先解析边界，再解码实体（&amp; 最后解），避免二次解析注入。
 class CqCodec {
@@ -65,11 +66,11 @@ class CqCodec {
       }).join();
 }
 
-/// 内部采用 v12 标准语义。仅 text/mention/mention_all/reply 为本轮核心子集。
-/// 图片等附件没有文件传输/权限语义，必须明确报错而非只保存 URL 假装已发送。
+/// 内部采用v12语义；image/file仅在可信媒体后端完整配置时接收。
 class OneBotMessageCodec {
-  OneBotMessageCodec(this.ids);
+  OneBotMessageCodec(this.ids, {this.allowMedia = false});
   final OneBotIdMap ids;
+  final bool allowMedia;
 
   List<Map<String, dynamic>> decode(Object? message, int version,
       {bool autoEscape = false}) {
@@ -133,11 +134,31 @@ class OneBotMessageCodec {
         }
         data = {'message_id': native};
       }
+      if (type == 'image' || type == 'file') {
+        if (!allowMedia) {
+          throw const OneBotFailure(
+              'unsupported_segment', 'Media backend is not installed');
+        }
+        if (version == 11 && data.containsKey('file')) {
+          if (data.containsKey('file_id')) {
+            throw const OneBotFailure(
+                'bad_segment', 'Ambiguous media reference');
+          }
+          data['file_id'] = data.remove('file');
+        }
+        if (data.keys
+            .any((key) => !{'file_id', 'name', 'mime'}.contains(key))) {
+          throw const OneBotFailure('unsupported_segment_data',
+              'Only opaque file references are accepted');
+        }
+        data = publicMediaData(data);
+      }
       final allowed = switch (type) {
         'text' => {'text'},
         'mention' => {'user_id'},
         'mention_all' => <String>{},
         'reply' => {'message_id', 'user_id'},
+        'image' || 'file' => {'file_id', 'name', 'mime'},
         _ => throw const OneBotFailure(
             'unsupported_segment', 'Unsupported message segment'),
       };
@@ -191,6 +212,13 @@ class OneBotMessageCodec {
           }
         };
       }
+      if ((type == 'image' || type == 'file') && allowMedia) {
+        final safe = publicMediaData(data);
+        return <String, dynamic>{
+          'type': type,
+          'data': version == 11 ? {'file': safe['file_id'], ...safe} : safe
+        };
+      }
       if (!{'text', 'mention', 'mention_all', 'reply'}.contains(type)) {
         // 不把未实现的内部段伪装成标准段；显式命名为在座扩展。
         return <String, dynamic>{
@@ -211,6 +239,8 @@ class OneBotMessageCodec {
           'mention' => '@${data['user_id']}',
           'mention_all' => '@全体成员',
           'reply' => '[回复]',
+          'image' => '[图片]',
+          'file' => '[文件]',
           _ => '[不支持的消息段]',
         };
       }).join();

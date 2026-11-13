@@ -142,6 +142,36 @@ manifests/00000002.json         # revision 2
 
 首次安装仍无法知道托管方隐藏了尚未见过的更高合法 revision；外部根 pin 不等于外部 latest revision 证明。主配置显式更新/恢复策略仍应由 owner 与 runtime 决定，不自动 reset 根信任或把仓库任意状态覆盖本机。当前完整历史在每次读取全量验证，适用原型规模，不承诺无限历史或严格全局事务。
 
+## 密文附件：按需不可变对象分支
+
+附件与设备 JSONL / main 完全分开，不把二进制混进设备事件 tree。复用同一 `GitSync` 安全命令通道、受管目录和串行/OS 锁；仅增加二进制 stdout 读取用于 Git blob，不执行过滤器或任意外部程序。
+
+```dart
+Future<void> GitSync.publishAttachment({
+  required String objectId,
+  required File ciphertext,
+});
+Future<Uint8List> GitSync.fetchAttachment(String objectId, {
+  int maxBytes = GitSync.maxAttachmentBytes,
+});
+static const int GitSync.maxAttachmentBytes = 20 * 1024 * 1024;
+
+AttachmentGit({required GitSync repository}); // 借用repo，无独立进程/生命周期
+// facade 提供同名 publishAttachment / fetchAttachment 方法与上限常量。
+```
+
+`objectId` 是**完整密文 bytes 的 SHA-256**，64 位小写 hex，不是原图/文件明文摘要。每个对象独占精确 `refs/heads/attachment/<objectId>`，tree 严格只有 mode `100644` 的根文件 `object.bin`。文件名、MIME、原文件名、明文摘要、nonce/tag、会话 key 及接收者授权不放在此 tree，必须由上层加密事件/descriptor 与附件加密层管理。拿到密文不能获得授权，hash 一致也不代表有业务读取权限。
+
+发布只接受宿主选定、位于本机私密附件目录的**密文**普通文件。逐级拒绝 symlink，并以同一文件 handle 有界读出不超过 20 MiB 的快照；先核对 hash 后才访问远端。该检查不是 OS sandbox，也不能识别 caller 错把明文当密文；调用方仍必须先加密、保护资料目录权限。纯 Dart 无跨平台 O_NOFOLLOW 原子打开，同用户恶意替换路径、mount/junction/硬链接与 native Git/文件系统本身仍属于本机信任边界。
+
+附件树通过私有 index 和无 filters 的 plumbing 写入。固定 Git 作者/时间/消息、无 parent 的确定性 root commit 让相同密文的不同 clone 产生相同 head。重复发布仅验已有 bytes 并 pin，不新增 commit；push 不带 force。并发裸仓库 ref-lock 冲突/网络不明结果后，仅在重新观测到**完全同一确定性 head 且密文 hash 正确**时作为成功去重，不能掩盖占用分支的不同内容。首次看到的已有合法同 hash 对象可接收原 head，但绝不覆盖。
+
+获取先 `ls-remote` 检查**一个精确 ref**，再只 fetch 该 ref、检查 tree/mode、在 binary read 前 `cat-file -s` 验大小，最后核对实际 length 和密文 SHA-256。不 fetch 全部 attachment refs；原 dev/main fetch 也不会带附件 wildcard，因此未请求的附件不会被默认下载。`maxBytes` 可降低当前接收上限，不能高于 20 MiB。数据按原 bytes 返回 `Uint8List`，不 UTF-8 编解码、不解密、不 checkout；caller 应再交给已授权的本地附件缓存/解密层。
+
+已见对象在 `.git/zaizuo-sync/attachment_pins.json` 记录 `objectId → commit`，`attachment_initialized` 防缺 pin 静默重置，私有 `refs/zaizuo-attachment-pins/<id>` 保留对象。附件是 immutable，**任何 head 变化都拒绝**，即使是 descendant 或 tree bytes 相同（`attachment_rewrite`）；已见分支删除返回 `attachment_deleted`，不会擅自重推重建；首次不存在返回 `attachment_not_found`。坏 hash、超过上限、可执行/symlink/gitlink、额外路径和分支占用不推进 pin。调用方若已缓存密文可依据本地策略离线读取，但本 API 每次检查远端，不把缓存成功冒充远端仍保留对象。
+
+20 MiB 是**最终 blob / 本地输入**边界，不是整个 Git pack、commit 历史、remote advertisement 或仓库总磁盘配额。恶意远端在 fetch 验 tree 前仍可能传大 pack/多历史、拖延进程；与下文已有 Git timeout/磁盘配额边界相同。完整图片/文件编码、授权、解密、跨电脑 SSH 与安装包由对应层独立验收；本任务的附件 Git 测试只用本机临时裸仓库，不把未实测 SSH 当作通过。
+
 ## Git 执行及凭据边界
 
 - 所有进程调用均为 `Process.run(gitExecutable, List<String>, runInShell: false)`。远端通过明确参数传入，不拼 shell 命令，不执行任何远端树里的文件，不 checkout、不初始化 submodule。
@@ -170,11 +200,13 @@ manifests/00000002.json         # revision 2
 ## 本机集成测试
 
 ```text
-dart test test/git_sync_test.dart test/community_git_test.dart --reporter expanded --concurrency 1
+dart test test/git_sync_test.dart test/community_git_test.dart test/attachment_git_test.dart --reporter expanded --concurrency 1
 ```
 
 测试不使用 mock Git。每个 fixture 在临时目录创建一个裸仓库和多个受控 clone，并真实 push/fetch/读树/验签/落盘。18 项测试覆盖多设备原信封往返与解密、分段、重复导入、坏签名全轮预验、origin/branch 不符、缺链、首次接收与已见本地链分叉、force-push 回退/分叉、descendant 删历史、删除已 pin 分支、pin 持久重开/丢失、同 clone 多实例并发、外部进程 OS 锁、可执行/symlink/gitlink tree、本地受控与裸远端 hooks/config、filter/submodule 元数据、URL凭据和用户现有仓库保护。没有真实账号密码、token、托管远端或公网监听。运行结束只回收 fixture 自建临时目录。
 
 另有 15 项 main 集成测试覆盖初始空分支、签名 main 多修订两 clone 往返、main/dev 共存互不改写、错误外部根、错误发布签名先于 transport 被拒、坏中间签名、缺失修订/错误 previous_hash、最新根指针、checkpoint 重开后回退、不相关 force-push、descendant 改已见签名历史、分支删除、checkpoint 丢失、跳版本发布与裸远端 hooks。GitSync 两项受限 main API 与 facade 均通过静态分析。
+
+附件另有 12 项真实裸仓库集成测试：binary bytes 往返、main/dev 共存、重复/并发去重、按需只抓一个 ref、发布坏 hash/本地超限、接收限额、恶意分支 hash/树碰撞、20 MiB+远端对象、已见 force 改头/删除/重开、丢 pin、symlink 与 hooks/自动配置拒绝。符号链接测试在系统允许创建 link 时执行；无法创建时其余边界仍执行，不冒称该系统完成 symlink 实测。
 
 这些测试证明所覆盖本机路径的行为，不等于 HTTPS/SSH 实网、所有系统 helper、断电耐久、移动端集成或经审计的生产安全保证。

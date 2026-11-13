@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
@@ -345,6 +346,96 @@ class GitSync {
         return added;
       });
 
+  /// Hard per-object ciphertext limit; no plaintext descriptor or key enters Git.
+  static const int maxAttachmentBytes = 20 * 1024 * 1024;
+
+  /// Publishes one immutable ciphertext object on its own exact attachment ref.
+  /// File paths are trusted local ciphertext paths, never remote message names.
+  Future<void> publishAttachment({
+    required String objectId,
+    required File ciphertext,
+  }) =>
+      _exclusive(() async {
+        _checkOpen();
+        _validateAttachmentId(objectId);
+        final bytes = await _readAttachmentFile(ciphertext, maxAttachmentBytes);
+        if (await sha256Hex(bytes) != objectId) {
+          throw const GitSyncException('attachment_hash', '附件密文摘要与对象号不一致');
+        }
+        final pins = await _readAttachmentPins();
+        final known = pins[objectId];
+        final remoteHead = await _fetchAttachmentHead(objectId, known);
+        if (remoteHead != null) {
+          final existing =
+              await _attachmentObject(remoteHead, objectId, maxAttachmentBytes);
+          if (!equalBytes(existing, bytes)) {
+            throw const GitSyncException(
+                'attachment_collision', '相同附件对象号对应不同密文');
+          }
+          pins[objectId] = remoteHead;
+          await _writeAttachmentPins(pins);
+          return;
+        }
+        final head = await _commitAttachment(objectId, bytes);
+        final ref = 'refs/heads/attachment/$objectId';
+        final localHead = await _localHead(ref);
+        if (localHead != null && localHead != head) {
+          throw const GitSyncException(
+              'attachment_collision', '本地附件引用已被其他内容占用');
+        }
+        await _run([
+          'update-ref',
+          ref,
+          head,
+          localHead ?? '0000000000000000000000000000000000000000'
+        ]);
+        await _assertLocalRemoteSafe();
+        // Deterministic root commit makes honest concurrent identical publishers
+        // choose the same head. Never force or replace an occupied attachment ref.
+        GitSyncException? pushFailure;
+        try {
+          await _run(['push', '--no-verify', '--', remoteUrl, '$ref:$ref']);
+        } on GitSyncException catch (error) {
+          if (error.code != 'git_failed') rethrow;
+          // Two honest writers can race the bare ref lock even with identical
+          // deterministic commits. Only an exact observed final head and blob
+          // can turn this ambiguous push failure into successful deduplication.
+          pushFailure = error;
+        }
+        final after = await _fetchAttachmentHead(objectId, known);
+        if (after == null && pushFailure != null) throw pushFailure;
+        if (after != head) {
+          throw const GitSyncException(
+              'attachment_collision', '远端未保留发布的不可变附件头');
+        }
+        await _attachmentObject(after!, objectId, maxAttachmentBytes);
+        pins[objectId] = after;
+        await _writeAttachmentPins(pins);
+      });
+
+  /// Fetches only the requested ref, never all attachment objects. A previously
+  /// observed ref being removed/changed fails closed, even for identical bytes.
+  Future<Uint8List> fetchAttachment(
+    String objectId, {
+    int maxBytes = maxAttachmentBytes,
+  }) =>
+      _exclusive(() async {
+        _checkOpen();
+        _validateAttachmentId(objectId);
+        if (maxBytes < 1 || maxBytes > maxAttachmentBytes) {
+          throw ArgumentError('附件接收上限需1字节至20MiB');
+        }
+        final pins = await _readAttachmentPins();
+        final head = await _fetchAttachmentHead(objectId, pins[objectId]);
+        if (head == null) {
+          throw const GitSyncException('attachment_not_found', '远端尚无此附件对象');
+        }
+        final bytes = await _attachmentObject(head, objectId, maxBytes);
+        pins[objectId] = head;
+        await _writeAttachmentPins(pins);
+        return bytes;
+      });
+
   /// Waits for already queued work; does not remove clone, pins or lock file.
   Future<void> close() => _exclusive(() async {
         _closed = true;
@@ -424,6 +515,7 @@ class GitSync {
     bool bootstrap = false,
     Set<int> allowed = const {0},
     Map<String, String>? environment,
+    bool binaryOutput = false,
   }) async {
     if (!bootstrap) await _assertManaged();
     final command = <String>[
@@ -475,7 +567,7 @@ class GitSync {
         environment: {..._environment, ...?environment},
         includeParentEnvironment: false,
         runInShell: false,
-        stdoutEncoding: utf8,
+        stdoutEncoding: binaryOutput ? null : utf8,
         stderrEncoding: utf8,
       );
     } on ProcessException {
@@ -851,6 +943,232 @@ class GitSync {
       }
     }
     return result;
+  }
+
+  void _validateAttachmentId(String objectId) {
+    if (!_device.hasMatch(objectId)) throw const FormatException('无效附件密文对象号');
+  }
+
+  Future<Uint8List> _readAttachmentFile(File file, int limit) async {
+    var path = p.normalize(p.absolute(file.path));
+    while (true) {
+      if (await FileSystemEntity.type(path, followLinks: false) ==
+          FileSystemEntityType.link) {
+        throw const GitSyncException(
+            'unsafe_attachment_path', '附件密文路径不能包含符号链接');
+      }
+      final parent = p.dirname(path);
+      if (parent == path) break;
+      path = parent;
+    }
+    if (await FileSystemEntity.type(file.path, followLinks: false) !=
+        FileSystemEntityType.file) {
+      throw const GitSyncException('unsafe_attachment_path', '附件密文必须是本机普通文件');
+    }
+    final handle = await file.open(mode: FileMode.read);
+    try {
+      final length = await handle.length();
+      if (length < 1 || length > limit) {
+        throw const GitSyncException('attachment_limit', '附件密文为空或超过本机上限');
+      }
+      final output = BytesBuilder(copy: false);
+      while (output.length <= limit) {
+        final chunk =
+            await handle.read((limit + 1 - output.length).clamp(1, 64 * 1024));
+        if (chunk.isEmpty) break;
+        output.add(chunk);
+      }
+      if (output.length < 1 || output.length > limit) {
+        throw const GitSyncException('attachment_limit', '附件密文为空或超过本机上限');
+      }
+      return output.takeBytes();
+    } finally {
+      await handle.close();
+    }
+  }
+
+  File get _attachmentPins =>
+      File(p.join(_metadata.path, 'attachment_pins.json'));
+  File get _attachmentInitialized =>
+      File(p.join(_metadata.path, 'attachment_initialized'));
+
+  Future<Map<String, String>> _readAttachmentPins() async {
+    await _assertManaged();
+    final kind =
+        await FileSystemEntity.type(_attachmentPins.path, followLinks: false);
+    if (kind == FileSystemEntityType.notFound) {
+      final marker = await FileSystemEntity.type(_attachmentInitialized.path,
+          followLinks: false);
+      final retained = (await _run([
+        'for-each-ref',
+        '--format=%(refname)',
+        'refs/zaizuo-attachment-pins/'
+      ]))
+          .stdout as String;
+      if (marker != FileSystemEntityType.notFound ||
+          retained.trim().isNotEmpty) {
+        throw const GitSyncException(
+            'missing_attachment_pins', '已见附件pin丢失；禁止静默重新信任');
+      }
+      await _writeAttachmentPins({});
+      await _attachmentInitialized.writeAsString('1\n', flush: true);
+      return <String, String>{};
+    }
+    if (kind != FileSystemEntityType.file ||
+        await FileSystemEntity.type(_attachmentInitialized.path,
+                followLinks: false) !=
+            FileSystemEntityType.file ||
+        await _attachmentInitialized.readAsString() != '1\n') {
+      throw const GitSyncException('invalid_attachment_pins', '附件pin/初始化标记无效');
+    }
+    final value = jsonObject(await _attachmentPins.readAsString());
+    if (value['version'] != 1 || value['objects'] is! Map<String, dynamic>) {
+      throw const GitSyncException('invalid_attachment_pins', '附件pin格式无效');
+    }
+    final pins = <String, String>{};
+    for (final entry in (value['objects'] as Map<String, dynamic>).entries) {
+      if (!_device.hasMatch(entry.key) ||
+          entry.value is! String ||
+          !_oid.hasMatch(entry.value as String)) {
+        throw const GitSyncException('invalid_attachment_pins', '附件pin内容无效');
+      }
+      pins[entry.key] = entry.value as String;
+    }
+    return pins;
+  }
+
+  Future<void> _writeAttachmentPins(Map<String, String> pins) async {
+    for (final entry in pins.entries) {
+      await _run([
+        'update-ref',
+        'refs/zaizuo-attachment-pins/${entry.key}',
+        entry.value
+      ]);
+    }
+    final temporary =
+        File(p.join(_metadata.path, 'attachment-pins-${randomId(12)}.tmp'));
+    await temporary.writeAsString(
+        canonicalJson({'version': 1, 'objects': pins}),
+        flush: true);
+    await temporary.rename(_attachmentPins.path);
+  }
+
+  Future<String?> _fetchAttachmentHead(
+      String objectId, String? pinnedHead) async {
+    final ref = 'refs/heads/attachment/$objectId';
+    await _assertLocalRemoteSafe();
+    final advertised =
+        ((await _run(['ls-remote', '--refs', '--', remoteUrl, ref])).stdout
+                as String)
+            .trim();
+    if (advertised.isEmpty) {
+      if (pinnedHead != null) {
+        throw const GitSyncException('attachment_deleted', '已见附件分支被删除；拒绝重新发布');
+      }
+      return null;
+    }
+    final fields = advertised.split(RegExp(r'\s+'));
+    if (fields.length != 2 || fields[1] != ref || !_oid.hasMatch(fields[0])) {
+      throw const GitSyncException('attachment_collision', '远端附件分支格式无效');
+    }
+    if (pinnedHead != null && pinnedHead != fields[0]) {
+      throw const GitSyncException('attachment_rewrite', '不可变附件分支头已变化');
+    }
+    final incoming = 'refs/zaizuo-attachment-incoming/${randomId(12)}';
+    try {
+      await _run([
+        'fetch',
+        '--no-tags',
+        '--no-recurse-submodules',
+        '--no-write-fetch-head',
+        '--',
+        remoteUrl,
+        '+$ref:$incoming'
+      ]);
+      final head = await _localHead(incoming);
+      if (head == null || head != fields[0]) {
+        throw const GitSyncException('attachment_rewrite', '附件分支在读取时发生变化');
+      }
+      if ((await _run(['cat-file', '-t', head])).stdout != 'commit\n') {
+        throw const GitSyncException('attachment_collision', '附件分支必须指向commit');
+      }
+      return head;
+    } finally {
+      await _run(['update-ref', '-d', incoming]);
+    }
+  }
+
+  Future<Uint8List> _attachmentObject(
+      String head, String objectId, int limit) async {
+    final listing =
+        (await _run(['ls-tree', '-z', '--full-tree', head])).stdout as String;
+    final match = RegExp(r'^100644 blob ([a-f0-9]{40})\tobject\.bin\x00$')
+        .firstMatch(listing);
+    if (match == null) {
+      throw const GitSyncException(
+          'attachment_collision', '附件树只能包含普通object.bin');
+    }
+    // No event/descriptor/object name is executed; binary bytes bypass UTF-8.
+    final blob = match.group(1)!;
+    final size = int.tryParse(
+        ((await _run(['cat-file', '-s', blob])).stdout as String).trim());
+    if (size == null || size < 1 || size > limit || size > maxAttachmentBytes) {
+      throw const GitSyncException('attachment_limit', '附件密文对象超过接收上限或为空');
+    }
+    final result = await _run(['cat-file', 'blob', blob], binaryOutput: true);
+    final bytes = Uint8List.fromList(result.stdout as List<int>);
+    if (bytes.length != size ||
+        bytes.length > limit ||
+        await sha256Hex(bytes) != objectId) {
+      throw const GitSyncException('attachment_hash', '远端附件密文摘要不符');
+    }
+    return bytes;
+  }
+
+  Future<String> _commitAttachment(String objectId, Uint8List bytes) async {
+    final temp =
+        await Directory(_metadata.path).createTemp('attachment-transaction-');
+    final indexEnvironment = {'GIT_INDEX_FILE': p.join(temp.path, 'index')};
+    try {
+      await _run(['read-tree', '--empty'], environment: indexEnvironment);
+      final file = File(p.join(temp.path, 'ciphertext.snapshot'));
+      await file.writeAsBytes(bytes, flush: true);
+      final blob =
+          ((await _run(['hash-object', '-w', '--no-filters', '--', file.path]))
+                  .stdout as String)
+              .trim();
+      if (!_oid.hasMatch(blob))
+        throw const GitSyncException('invalid_object', '附件blob编号无效');
+      await _run(
+          ['update-index', '--add', '--cacheinfo', '100644,$blob,object.bin'],
+          environment: indexEnvironment);
+      final tree = ((await _run(['write-tree'], environment: indexEnvironment))
+              .stdout as String)
+          .trim();
+      if (!_oid.hasMatch(tree))
+        throw const GitSyncException('invalid_object', '附件tree编号无效');
+      final head = ((await _run([
+        'commit-tree',
+        tree,
+        '-m',
+        'zaizuo: ciphertext attachment $objectId'
+      ], environment: {
+        'GIT_AUTHOR_NAME': 'zaizuo',
+        'GIT_AUTHOR_EMAIL': 'attachment@zaizuo.invalid',
+        'GIT_COMMITTER_NAME': 'zaizuo',
+        'GIT_COMMITTER_EMAIL': 'attachment@zaizuo.invalid',
+        'GIT_AUTHOR_DATE': '946684800 +0000',
+        'GIT_COMMITTER_DATE': '946684800 +0000',
+      }))
+              .stdout as String)
+          .trim();
+      if (!_oid.hasMatch(head))
+        throw const GitSyncException('invalid_object', '附件commit编号无效');
+      return head;
+    } finally {
+      if (p.dirname(temp.path) == _metadata.path)
+        await temp.delete(recursive: true);
+    }
   }
 
   void _validateFingerprint(String fingerprint) {

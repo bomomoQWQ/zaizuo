@@ -1,6 +1,7 @@
 library;
 
 export 'src/attachments.dart';
+export 'src/attachment_git.dart';
 export 'src/codec.dart';
 export 'src/config.dart';
 export 'src/community_git.dart';

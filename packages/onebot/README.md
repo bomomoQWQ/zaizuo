@@ -57,7 +57,7 @@ await backend.close(); // 不会关闭共享ChatService。
 - domain 的每个可读 `chat`/`shadow` **会话**分别映射为 11/12 group；茶会不会错投普通主房间。12 同时支持标准两级映射：`guild_id = space.id`，`channel_id = conversation.id`。频道列表只列出有当前权限的 chat/shadow；`joined_only` 在域内没有独立频道加入状态，因此“已加入”与空间/房间可读权限一致。12 接收事件优先使用 `message.channel`。
 - 私聊保留双方原生主体身份，不把机器人发送身份替换为 owner。业务时间为 UTC Unix 毫秒；11 边界返回整数秒，12 返回浮点秒。12 self 有 `user_id/user_name/user_displayname`，用户列表增加标准 `user_remark`，没有数据的显示名/备注为空字符串。
 - 消息核心段：11 `text/at/reply`，12 `text/mention/mention_all/reply`；数组、单段对象都接受。11 字符串支持 CQ 转义与 `auto_escape`，CQ 解析先识别边界再一次解码实体，`&amp;` 最后解。11 消息段 ID 引用经稳定映射转换，12 使用原生字符串 ID。
-- 附件、媒体、富文本、未识别消息段/段参数明确返回 unsupported/bad segment 错误，不把任意 URL 保存成功冒充文件发送。内部遇到未知段时仅以 `zaizuo.unsupported` 替代投影，不能据此认为附件传输已实现。
+- 完整配置可信媒体后端时支持图片/文件引用与受限 data 上传/下载（见下文）；未配置媒体、其它媒体/富文本、未识别消息段/段参数明确返回 unsupported/bad segment 错误。不把任意 URL 保存成功冒充文件发送，也不直接输出内部附件描述符。
 - bot 发送成功不伪装成“机器人收到用户消息”：额外上报 `notice` / `zaizuo.message_sent`，携带 `zaizuo.detail_type`。来自其它主体的消息使用标准 message 事件。WS 首事件为 11 lifecycle/connect 或 12 meta/connect；12 随后有初始 status_update，并以 pingInterval 检查状态变化。默认不产生应用层 heartbeat 事件，仍有 WS ping/pong。
 - `get_supported_actions` 返回真实子集，能力不同列表不同；版本返回 `zaizuo.compatibility: subset`。`delete_msg` / `delete_message` 明确报不支持（11 `1404`，12 `10002`），不假成功。
 
@@ -80,6 +80,27 @@ await backend.close(); // 不会关闭共享ChatService。
 - 扩展请求外层和 params 都有白名单；未知动作/字段拒绝，不接受 `actor/bot_id/sender_id/url` 等身份或抓取覆盖字段。所有动作仍固定到凭据绑定 bot，domain 权限、cap、限额和可见范围独立检查。
 - 朋友圈 `public/friends/private`、论坛房间访问/历史区间、隐藏帖子/评论都由 domain 授权列表过滤；禁止评论/点赞不可见的 private/friends 内容。仅有 post 能力而无 history.read 的 bot 可以收到它自己刚发布的回执，但不能借回执读取其它历史回复/评论。
 - 本轮只做显式动作和授权查询，尚不广播 forum/feed 专用事件；标准 `send_message` 和普通消息事件不会把论坛帖子误投到默认房间。图片/file_id 等媒体段未接入验证后端时仍明确 `10005`（11 映射 `1400`），不自动抓 URL，也不假装完成媒体发送。
+
+### 图片/文件 data 上传、下载与消息引用
+
+媒体是可选 `OneBotMediaBackend` 能力：只有 `mediaEnabled=true` 时才出现在支持动作列表，domain adapter 要求下述四个主 hook 全部配置。部分配置/未配置时，image/file 段明确返回 `10005`，不会当普通 JSON 保存成功冒充已完成媒体发送。
+
+| 版本 | 动作 | 严格参数与结果 |
+|---|---|---|
+| 12 标准子集 | `upload_file` | `{type:"data",name,data:规范Base64,sha256?:小写SHA256,"zaizuo.mime"?:MIME,"zaizuo.purpose"?:"image"或"file"}` → `{file_id}` |
+| 12 标准子集 | `get_file` | `{file_id,type:"data"}` → `{name,data:Base64,"zaizuo.mime","zaizuo.size"}` |
+| 11 在座扩展 | `zaizuo.upload_file` / `zaizuo.get_file` | 同上；不虚构标准 11 `upload_file` 动作 |
+
+- 仅 `type=data`；明确拒绝 URL、path、headers、数据 URI、CQ `base64://` 和本机路径读取，不进行任意 HTTP 抓取或文件打开。`file_id` 只接受 1～512 个 ASCII 字母数字或 `_.~-` 的 opaque ID（不是自报 scope）。
+- 默认最大单文件 **8 MiB**，宿主可用 `maxMediaBytes` 配置。Base64 在解码前检查编码长度、规范字符/padding，解码后检查大小与规范性；大包用线性扫描，避免递归正则栈溢出。可选 `sha256` 在交付宿主前验证，不接受错误校验和。
+- 文件名最多 256 个 Unicode 字符；去除控制字符，替换路径分隔符和 Windows 危险字符，处理保留设备名。名字仅元数据、不是此包可打开的路径。MIME/purpose 明确独立，image purpose 要求 image MIME，可信宿主仍须验证真实内容/用途，不能因扩展名就声称图片解码安全。
+- 12 `image/file` 输入只含 `file_id` 及可选 `name/mime`；11 image/file 同时允许 CQ `file=opaque-id`（file 段为在座扩展），不接受 URL/path。输入 `name/mime` 不决定授权，最终元数据由可信后端确认。
+- 先确定 private/group/channel 或 forum/feed 真实目标，并在独立 domain 候选快照预检当前 bot 的身份/cap/发送权限，再进入可信解析。宿主必须验证 source ID 当前 bot 可使用，并按**目的 scope 当前 epoch**处理，不能把旧 descriptor 直接转发或信任请求的 scope。
+- 内部持久化媒体形状为 `{type:"image"|"file",data:{attachment:{scope,epoch,descriptor}}}`，不得含上传源 ID、明文 Base64 或任意自报路径。Node 可在 execute 中统一解析一次，resolver 先保留已验证 opaque 引用；此模式必须提供相应 committing handler。提交后投影仍严格要求 scoped encrypted attachment，不能未解析就假成功。
+- 接收事件/历史/论坛/朋友圈结果会 **await** `projectMediaParts`，只输出后端新签发的 `file_id/name/mime`，不透传 descriptor/key/epoch。get_file 必须由宿主再次校验当前 bot 的消息或 feed 可见性，再解密；同一 ID 不因知道编号就授权另一个 bot。
+- 异步事件按到达顺序串行投影，不先发缺附件消息再补。待投影队列默认 32，满时报 degraded 而不是无限积压；不承诺零丢失。媒体 hook 默认 30 秒超时，超时后该 adapter 媒体操作永久 fail-closed，须由宿主核对状态并重启，防不能取消的 Future 持续累积。
+
+**显式扩容传输**：原 `OneBotLimits()` 默认保持 64 KiB。启用完整 8 MiB 文件应显式用 `OneBotLimits.media()`（HTTP/WS 共用），wire cap 为 `ceil(maxMediaBytes/3)*4+65536`；默认 TCP 连接 8、同时 HTTP 2、WS 动作/发送队列各 2；projection 另限媒体动作并发 2。可在工厂传 `maxMediaBytes/maxConnections/maxHttpRequests`，仍有首部/正文/帧/超时/速率上限，不是无界上传。大 JSON 返回同样受 wire cap；真实部署需评估并发内存占用而非仅单文件上限。
 
 ### ID 映射持久化
 
@@ -121,7 +142,9 @@ await backend.close(); // 不会关闭共享ChatService。
 - `messageStream` 可只推“已经持久化提交”的 MessageRecord；adapter 收到仍会重新检查当前 domain 读权限。默认直接监听 domain 的内存提交流，不声称已落盘。
 - `DomainCommandHandler` 为 `FutureOr<Map<String,dynamic>> Function(String operation, Map<String,dynamic> params)`，覆盖论坛/朋友圈写命令；未提供则默认调用同一可信本地 domain。宿主必须把该回调绑定到同一个 bot，运行 runtime 命令后更新 provider，并返回命令的 `result`（record.toJson），不能返回整个 event envelope。adapter 按已提交 state 复核结果 ID/原作者/所属帖子，失败不会假成功。
 - commandHandler 白名单：`forum.post {room,title,parts,idempotency_key?}`、`forum.reply {post,parts,idempotency_key?}`、`feed.post {parts,visibility,idempotency_key?}`、`feed.comment {post,parts,idempotency_key?}`、`feed.like {post,liked,idempotency_key?}`；省略未提供的幂等键，**不含任意 Actor/owner**。`feed.like` 可以返回空 Map，其它应含结果的原生 `id`。查询始终走 domain 授权 API，不把 state maps 当不受限列表。
-- 宿主须让 resolver/handler/provider 的持久化和状态切换一致；hook 是可信集成点，不是可由 OneBot 请求任意选择的回调。
+- 媒体构造参数：`mediaUploadHandler`（`{Actor actor,String name,List<int> bytes,String mime,String purpose}` → `FutureOr<Map>`）、`mediaGetHandler`（`{Actor actor,String fileId}` → `FutureOr<Map>`）、`resolveMediaParts`（`{Actor actor,String conversationId,List<JsonMap> parts}` → `FutureOr<List<JsonMap>>`）、`projectMediaParts`（`{Actor actor,MessageRecord message}` → `FutureOr<List<JsonMap>>`），上述具名字段均 required。upload hook 返回 `{file_id}`，get hook 返回 `{name,mime,size,data:Base64}`；额外字段不会向外透传。
+- 可选 `mediaScope({required Actor actor,required String operation,required Map<String,dynamic> params}) → FutureOr<String>` 用于 forum room/feed scope，必须与 domain 真实目标一致；`maxMediaBytes=8MiB`、`maxPendingMediaEvents=32`、`mediaOperationTimeout=30s`。论坛用真实 MessageRecord，feed/comment 用其原生 record ID、实际 feed scope、原作者和 parts 合成只读 MessageRecord 交 project hook；宿主需按对应 record 类型授权。
+- 宿主须让 resolver/handler/provider 的持久化和状态切换一致；hook 是可信集成点，不是可由 OneBot 请求任意选择的回调。此包测试用内存可信媒体宿主验证协议/授权边界；实际附件加密、密文对象存储和 scope key 由 runtime/core 实现，不据本包测试单独宣称加密安全。
 
 ## 反向 WebSocket
 
@@ -134,16 +157,16 @@ await backend.close(); // 不会关闭共享ChatService。
 ## 真实未支持范围
 
 - 删除/撤回；好友/入群/管理/禁言等 OneBot 写动作；标准消息接口的 forumThread 投影（使用上述 zaizuo. 原生扩展发帖/回复/朋友圈，不会误发默认房间）。
-- 除上述 text/mention/reply 外的标准消息段；文件上传下载、图片/语音/视频/位置/转发/媒体转码；不抓取任意 URL。
+- 除上述 text/mention/reply 和可选 image/file 外的消息段；语音/视频/位置/转发/媒体转码、URL/path 上传下载、分片上传下载；不抓取任意 URL。图片/文件 data 及 opaque 引用已支持，但实际持久化加密需可信 runtime 媒体后端。
 - v11 `_async` / `_rate_limited` 后缀、GET API、表单 API、专用 `/api`/`/event` 连接；HTTP webhook/HTTP POST 事件推送/快速操作；MessagePack。
 - 频道成员专用动作、guild/channel 修改/退出；非消息业务 notice/request 事件；完整实时账号登录生命周期（状态是本地业务可用性，不代表已连接外部平台）。
 - SDK Flutter/Android 前后台与系统通知、真实账号、TLS 生产部署、密码学/端到端安全审计、生产负载/长时间慢收端压力测试。
 
 ## 本机测试
 
-本轮 Dart 3.14.0：`dart analyze` 无问题，`dart test --reporter expanded --timeout 15s` **45 项通过**；全部网络测试只监听环回地址，未使用真实凭据。
+本轮 Dart 3.14.0：`dart analyze` 无问题，`dart test --reporter expanded --timeout 30s` **57 项通过**；全部网络测试只监听环回地址，未使用真实凭据。
 
-覆盖双版本同 bot 收发与跨版本消息映射；11 任意 JSON/12 string echo；未认证/Origin/URLtoken/self 越权；domain permissions 映射；好友/群/频道查询；WS 消息事件与独立 get_latest_events/长轮询/缓冲溢出；反向 11/12 握手/动作/事件/断线重连/关闭/禁止重定向；CQ 转义；首部大小/超时、超额正文、WS 动作队列、巨大帧声明；持久化 hooks 与 serviceProvider 重放切换；11/12 论坛与朋友圈发布/回复/评论/点赞/取消/查询、public/friends/private 权限、隐藏记录与分页、扩展字段白名单、commandHandler 参数与失败、HTTP/反向 WS 原生扩展。没有把这些短时本机测试当作时间完整性或生产可靠性证明。
+覆盖双版本同 bot 收发与跨版本消息映射；11 任意 JSON/12 string echo；未认证/Origin/URLtoken/self 越权；domain permissions 映射；好友/群/频道查询；WS 消息事件与独立 get_latest_events/长轮询/缓冲溢出；反向 11/12 握手/动作/事件/断线重连/关闭/禁止重定向；CQ 转义；首部大小/超时、超额正文、WS 动作队列、巨大帧声明；持久化 hooks 与 serviceProvider 重放切换；11/12 论坛与朋友圈发布/回复/评论/点赞/取消/查询、public/friends/private 权限、隐藏记录与分页、扩展字段白名单、commandHandler 参数与失败、HTTP/反向 WS 原生扩展；HTTP/WS 双版本媒体上传/引用/下载、跨 bot/cap/会话授权、URL/path/校验和/Base64/大小拒绝、异步投影顺序、forum/feed 媒体、Node 延迟一次解析、精确 8 MiB 数据边界及媒体并发。没有把这些短时本机测试当作时间完整性或生产可靠性证明。
 
 Windows 工具环境若系统 TEMP/telemetry 目录拒绝访问，可为**本次进程**配置包内 `.dart_tool/local-runtime` 的 TEMP/TMP/APPDATA/LOCALAPPDATA，设置 `DART_SUPPRESS_ANALYTICS=true` 和仓库 `.local/pub-cache`；不改系统 PATH、不修系统目录权限、不另下载 SDK。
 
@@ -152,4 +175,4 @@ Windows 工具环境若系统 TEMP/telemetry 目录拒绝访问，可为**本次
 本轮按官网逐页核对，安全收紧/未实现项已在上文明确：
 
 - 11 [HTTP](https://11.onebot.dev/communication/http.html)、[WS / echo](https://11.onebot.dev/communication/ws.html)、[反向 WS](https://11.onebot.dev/communication/ws-reverse.html)、[公开 API](https://11.onebot.dev/api/public.html)、[消息事件](https://11.onebot.dev/event/message.html)、[CQ 转义](https://11.onebot.dev/message/string.html)、[元事件](https://11.onebot.dev/event/meta.html)。
-- 12 [动作请求](https://12.onebot.dev/connect/data-protocol/action-request/)、[动作响应/错误码](https://12.onebot.dev/connect/data-protocol/action-response/)、[HTTP](https://12.onebot.dev/connect/communication/http/)、[WS](https://12.onebot.dev/connect/communication/websocket/)、[反向 WS](https://12.onebot.dev/connect/communication/websocket-reverse/)、[元动作](https://12.onebot.dev/interface/meta/actions/)、[元事件](https://12.onebot.dev/interface/meta/events/)、[用户动作](https://12.onebot.dev/interface/user/actions/)、[群动作](https://12.onebot.dev/interface/group/actions/)、[消息动作](https://12.onebot.dev/interface/message/actions/)、[消息数据类型](https://12.onebot.dev/interface/message/type/)、[消息段](https://12.onebot.dev/interface/message/segments/)、[频道动作](https://12.onebot.dev/interface/guild/actions/)、[频道事件](https://12.onebot.dev/interface/guild/message-events/)。
+- 12 [动作请求](https://12.onebot.dev/connect/data-protocol/action-request/)、[动作响应/错误码](https://12.onebot.dev/connect/data-protocol/action-response/)、[HTTP](https://12.onebot.dev/connect/communication/http/)、[WS](https://12.onebot.dev/connect/communication/websocket/)、[反向 WS](https://12.onebot.dev/connect/communication/websocket-reverse/)、[元动作](https://12.onebot.dev/interface/meta/actions/)、[元事件](https://12.onebot.dev/interface/meta/events/)、[用户动作](https://12.onebot.dev/interface/user/actions/)、[群动作](https://12.onebot.dev/interface/group/actions/)、[消息动作](https://12.onebot.dev/interface/message/actions/)、[消息数据类型](https://12.onebot.dev/interface/message/type/)、[消息段](https://12.onebot.dev/interface/message/segments/)、[频道动作](https://12.onebot.dev/interface/guild/actions/)、[频道事件](https://12.onebot.dev/interface/guild/message-events/)、[文件动作](https://12.onebot.dev/interface/file/actions/)。

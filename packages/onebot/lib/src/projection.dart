@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:crypto/crypto.dart';
+
 import 'backend.dart';
 import 'id_map.dart';
 import 'message_codec.dart';
+import 'media.dart';
 
 const oneBotImplementation = 'zaizuo';
 const oneBotImplementationVersion = '0.1.0';
@@ -22,14 +25,16 @@ class OneBotProjection {
       OneBotIdMap? ids,
       this.eventBufferSize = 256,
       this.maxLongPollSeconds = 30,
-      this.maxConcurrentActions = 32})
+      this.maxConcurrentActions = 32,
+      this.maxConcurrentMediaActions = 2})
       : ids = ids ?? OneBotIdMap() {
     if (eventBufferSize < 1 ||
         maxLongPollSeconds < 0 ||
-        maxConcurrentActions < 1) {
+        maxConcurrentActions < 1 ||
+        maxConcurrentMediaActions < 1) {
       throw ArgumentError('Invalid event limits');
     }
-    codec = OneBotMessageCodec(this.ids);
+    codec = OneBotMessageCodec(this.ids, allowMedia: mediaEnabled);
     this.ids.encode('user', backend.botId);
     _subscription = backend.messages.listen(_receive, onError: (Object _) {
       // 后端流错误不回显内部数据；状态变为 degraded，不能宣称 good。
@@ -43,6 +48,11 @@ class OneBotProjection {
   final int maxLongPollSeconds;
   final int maxConcurrentActions;
   int _activeActions = 0;
+  final int maxConcurrentMediaActions;
+  int _activeMediaActions = 0;
+  bool get mediaEnabled =>
+      backend is OneBotMediaBackend &&
+      (backend as OneBotMediaBackend).mediaEnabled;
   final _events = StreamController<OneBotEvent>.broadcast(sync: true);
   final _buffer = Queue<BotMessage>();
   late final StreamSubscription<BotMessage> _subscription;
@@ -96,12 +106,18 @@ class OneBotProjection {
     'zaizuo.comment_feed',
     'zaizuo.like_feed',
   ];
-  List<String> get supportedActions11 =>
-      [...actions11, if (backend is OneBotSocialBackend) ...socialActions];
+  static const mediaActions11 = ['zaizuo.upload_file', 'zaizuo.get_file'];
+  static const mediaActions12 = ['upload_file', 'get_file'];
+  List<String> get supportedActions11 => [
+        ...actions11,
+        if (backend is OneBotSocialBackend) ...socialActions,
+        if (mediaEnabled) ...mediaActions11
+      ];
   List<String> get supportedActions12 => [
         ...actions12,
         if (backend is OneBotChannelBackend) ...channelActions12,
-        if (backend is OneBotSocialBackend) ...socialActions
+        if (backend is OneBotSocialBackend) ...socialActions,
+        if (mediaEnabled) ...mediaActions12
       ];
 
   void _receive(BotMessage message) {
@@ -245,7 +261,9 @@ class OneBotProjection {
       final params = Map<String, dynamic>.from(request['params'] as Map? ?? {});
       _checkSelf(request, params, version);
       final action = request['action'] as String;
-      if (socialActions.contains(action) &&
+      if ((socialActions.contains(action) ||
+              mediaActions11.contains(action) ||
+              mediaActions12.contains(action)) &&
           request.keys.any((key) =>
               !{'action', 'params', 'echo', 'self', 'self_id'}.contains(key))) {
         throw const OneBotFailure(
@@ -333,6 +351,9 @@ class OneBotProjection {
       int version, String action, Map<String, dynamic> p) async {
     if (socialActions.contains(action))
       return _socialAction(version, action, p);
+    if (mediaActions11.contains(action) || mediaActions12.contains(action)) {
+      return _mediaAction(version, action, p);
+    }
     switch (action) {
       case 'send_message':
       case 'send_msg':
@@ -520,6 +541,69 @@ class OneBotProjection {
     }
     throw const OneBotFailure(
         'unsupported_action', 'Action is not implemented');
+  }
+
+  Future<Object?> _mediaAction(
+      int version, String action, Map<String, dynamic> p) async {
+    if (!mediaEnabled)
+      throw const OneBotFailure(
+          'unsupported_action', 'Media is not configured');
+    if (_activeMediaActions >= maxConcurrentMediaActions) {
+      throw const OneBotFailure('rate_limited', 'Too many media actions');
+    }
+    _activeMediaActions++;
+    try {
+      final media = backend as OneBotMediaBackend;
+      final upload = action.endsWith('upload_file');
+      final allowed = upload
+          ? {'type', 'name', 'data', 'sha256', 'zaizuo.mime', 'zaizuo.purpose'}
+          : {'type', 'file_id'};
+      if (p.keys.any((key) =>
+          !allowed.contains(key) && key != 'self' && key != 'self_id')) {
+        throw const OneBotFailure(
+            'unsupported_param', 'Unknown media parameter');
+      }
+      if (p['type'] != 'data') {
+        throw const OneBotFailure('unsupported_param',
+            'Only type=data is supported; URL/path are forbidden');
+      }
+      if (upload) {
+        final name = sanitizeMediaName(p['name']);
+        final mime =
+            validateMediaMime(p['zaizuo.mime'] ?? 'application/octet-stream');
+        final purpose = validateMediaPurpose(p['zaizuo.purpose'] ?? 'file');
+        if (purpose == 'image' && !mime.startsWith('image/')) {
+          throw const OneBotFailure(
+              'bad_param', 'Image purpose requires an image MIME type');
+        }
+        final bytes = decodeMediaBase64(p['data'], media.maxMediaBytes);
+        if (p.containsKey('sha256')) {
+          final digest = p['sha256'];
+          if (digest is! String ||
+              !RegExp(r'^[a-f0-9]{64}$').hasMatch(digest) ||
+              sha256.convert(bytes).toString() != digest) {
+            throw const OneBotFailure('bad_param', 'File checksum mismatch');
+          }
+        }
+        final result = await media.uploadFile(
+            name: name, bytes: bytes, mime: mime, purpose: purpose);
+        return {'file_id': validateOpaqueFileId(result['file_id'])};
+      }
+      final result = await media.getFile(validateOpaqueFileId(p['file_id']));
+      final bytes = decodeMediaBase64(result['data'], media.maxMediaBytes);
+      if (result.containsKey('size') && result['size'] != bytes.length) {
+        throw const OneBotFailure('internal', 'Media backend size mismatch');
+      }
+      return {
+        'name': sanitizeMediaName(result['name']),
+        'data': result['data'],
+        'zaizuo.mime':
+            validateMediaMime(result['mime'] ?? 'application/octet-stream'),
+        'zaizuo.size': bytes.length
+      };
+    } finally {
+      _activeMediaActions--;
+    }
   }
 
   Future<Object?> _socialAction(
