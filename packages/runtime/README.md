@@ -88,7 +88,13 @@ await node.start(botId: fixedOwnedBotId, token: localOneBotToken, port: 6700);
 await node.close();
 ```
 
-`open` 拥有自己打开的 store/replica；`ownsGit: true` 时也负责关闭传入 Git。可监听 `node.errors` 的稳定错误码和查询 `status()`；命令失败必须传播，不能把 store/replica/名册错误当作成功。profile trust 与 FileEventStore trust 为同一对象，仅接受通过外部 root pin 和完整 revision 链校验的名册；本原型只实现 additive 入驻，移除/吊销/换钥不可宣称已完成自动安全更新。
+`open` 拥有自己打开的 store/replica；`ownsGit: true` 时也负责关闭传入 Git。可监听 `node.errors` 的稳定错误码和查询 `status()`；命令失败必须传播，不能把 store/replica/名册错误当作成功。
+
+图形客户端另用两个入口，均不改变“成功只代表本机落盘”的语义：
+
+- `node.changes`：命令、名册接纳、每轮同步（含失败）、中继导入刷新后各发一次 `NodeChange(reason)`。它只提示重新查询，不携带业务数据，也不是送达回执。
+- `node.startBackgroundSync()`：不启动 OneBot 也按 `syncInterval` 定时同步；每轮结束才排下一轮。`node.syncing` 表示当前是否有同步在跑。
+- `node.pushedThroughSequence` + `node.lastSyncAt`：仅本进程内、最近一次 push 经远端回读确认时的本设备链序号与时间。重启后归零直到下次成功，且**不代表任何收件人已拉取**；客户端据此区分“本机已保存”与“已推送到 Git”，不能用它显示“已送达”。profile trust 与 FileEventStore trust 为同一对象，仅接受通过外部 root pin 和完整 revision 链校验的名册；本原型只实现 additive 入驻，移除/吊销/换钥不可宣称已完成自动安全更新。
 
 ## 验证与已知边界
 

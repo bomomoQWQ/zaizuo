@@ -12,6 +12,13 @@ import 'commands.dart';
 import 'relay_client.dart';
 import 'replica.dart';
 
+/// 节点状态可能已变化的通知。只说明“请重新查询”，不携带业务数据，也不是送达回执。
+final class NodeChange {
+  /// `command`、`admit`、`sync`、`relay` 之一。
+  final String reason;
+  const NodeChange(this.reason);
+}
+
 /// Non-UI application lifecycle. All mutations, sync rounds and relay refreshes
 /// use one queue; successful commands mean local flush, never remote delivery.
 class ZaizuoNode {
@@ -25,6 +32,7 @@ class ZaizuoNode {
   final String? _relayToken;
   final bool _ownsGit;
   final _errors = StreamController<String>.broadcast();
+  final _changes = StreamController<NodeChange>.broadcast();
   Future<void> _tail = Future.value();
   Future<void> _relayTail = Future.value();
   Future<Map<String, dynamic>>? _syncing;
@@ -42,6 +50,11 @@ class ZaizuoNode {
   String? lastSyncError;
   String? lastRelayError;
   int completedSyncs = 0;
+
+  /// 本进程内最近一次 Git push 成功并经远端回读确认时，本设备链的最高序号。
+  /// 重启后从 0 开始，直到下一次同步成功；它不表示任何收件人已拉取。
+  int pushedThroughSequence = 0;
+  DateTime? lastSyncAt;
 
   ZaizuoNode._(this.profile, this.store, this.replica, this.git,
       this.syncInterval, this.relayUrl, this._relayToken, this._ownsGit);
@@ -86,10 +99,28 @@ class ZaizuoNode {
   }
 
   Stream<String> get errors => _errors.stream;
+
+  /// 命令、名册接纳、同步轮次（含失败）和中继导入刷新完成后各发一次。
+  Stream<NodeChange> get changes => _changes.stream;
   int? get port => _server?.port;
   OneBotIdMap? get ids => _ids;
   bool get relayConnected => _relay?.isConnected ?? false;
   bool get isClosed => _closed;
+  bool get syncing => _syncing != null;
+  bool get backgroundSyncEnabled => _background;
+
+  /// 不启动 OneBot 也能按 [syncInterval] 定时同步（供图形客户端使用）。
+  /// 每轮结束后才排下一轮；重复调用无副作用。
+  void startBackgroundSync() {
+    if (_closed) throw StateError('节点已关闭');
+    if (_background) return;
+    _background = true;
+    _schedule(immediate: true);
+  }
+
+  void _notify(String reason) {
+    if (!_changes.isClosed) _changes.add(NodeChange(reason));
+  }
 
   Map<String, dynamic> status() => {
         'project': '在座',
@@ -134,7 +165,11 @@ class ZaizuoNode {
   }) =>
       _serial(() async {
         final actor = actorId ?? profile.identity.public.accountId;
-        if (operation == 'bot.draft') return _createLocalDraft(actor, params);
+        if (operation == 'bot.draft') {
+          final draft = await _createLocalDraft(actor, params);
+          _notify('command');
+          return draft;
+        }
         var sharedOperation = operation;
         var sharedParams = params;
         BotRecord? admittingDraft;
@@ -186,6 +221,7 @@ class ZaizuoNode {
         }
         await _ensureKeys();
         await _maintainRelay();
+        _notify('command');
         return result;
       });
 
@@ -254,6 +290,7 @@ class ZaizuoNode {
                     manifest.accounts.map((a) => a.accountId).toSet()
             });
         await _persistKeys();
+        _notify('admit');
         return next;
       });
 
@@ -340,6 +377,9 @@ class ZaizuoNode {
         if (profile.trust.devices.containsKey(profile.device.certificate!.id)) {
           await media.flushUploads();
           pushed = await repository.push(store);
+          // push 在本队列内执行，期间没有本设备新追加；回读确认后整条本机链已在远端。
+          pushedThroughSequence =
+              store.index.headSequence(profile.device.certificate!.id);
         }
       } else {
         await replica.refresh();
@@ -350,6 +390,8 @@ class ZaizuoNode {
       await _maintainRelay();
       completedSyncs++;
       lastSyncError = null;
+      lastSyncAt = DateTime.now().toUtc();
+      _notify('sync');
       return {
         'pushed': pushed,
         'pulled': pulled,
@@ -359,6 +401,7 @@ class ZaizuoNode {
     } catch (error) {
       lastSyncError = _code(error);
       _report(lastSyncError!);
+      _notify('sync');
       rethrow;
     }
   }
@@ -553,6 +596,7 @@ class ZaizuoNode {
             unawaited(_serial(() async {
               await replica.refresh();
               await _ensureKeys();
+              _notify('relay');
             }).then<void>((_) {}, onError: (Object error, StackTrace _) {
               lastRelayError = _code(error);
               _report('relay_import_refresh_failed');
@@ -648,6 +692,7 @@ class ZaizuoNode {
         await git?.close();
       });
     await finish(_errors.close);
+    await finish(_changes.close);
     if (firstError != null) Error.throwWithStackTrace(firstError!, firstStack!);
   }
 
