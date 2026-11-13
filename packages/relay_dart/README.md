@@ -77,4 +77,4 @@ dart test
 
 本轮实跑 Windows x64 Dart **3.14.0**：format 检查 13 个 Dart 文件无变更、analyze 无问题、113 项测试通过。曾验证最新允许的 crypto 3.0.8 / test 1.33.0，也验证最低直接依赖 crypto 3.0.6 / test 1.25.15（传递依赖由当前 SDK 正常解析）。全量 `pub downgrade` 会选到不兼容新 Dart 的历史传递测试工具，不作为本包支持承诺。作为独立库不提交 lock；旧 SDK 需在本包目录重新 `pub get` 选择兼容版本。**Dart 3.6、Linux/Android、Flutter Native 实机、真实网络慢 TCP/RSS 压测未实跑**。背压测试使用可控 Socket.flush 阻塞以免用不稳定的大流量/硬 sleep 假装证明；真实坏链路仍可能只出现异常关闭。
 
-新项目许可证尚待项目所有者决定；不包含/复制 NapCat 实现、二进制或许可证。
+本项目原创代码采用 [AGPL-3.0-only](../../LICENSE)，见[项目声明](../../NOTICE)；第三方依赖保留各自许可证。不包含/复制 NapCat 实现、二进制或许可证。

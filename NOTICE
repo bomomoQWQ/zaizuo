@@ -1,0 +1,34 @@
+在座 / zaizuo
+Copyright (C) 2026 bomomoQWQ and contributors
+
+SPDX-License-Identifier: AGPL-3.0-only
+
+The original project code, documentation and original test fixtures in this
+repository are licensed under the GNU Affero General Public License,
+version 3 only. See LICENSE for the full terms. No additional project
+restrictions are imposed by this notice.
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of version 3 of the GNU Affero General Public License as
+published by the Free Software Foundation.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+or FITNESS FOR A PARTICULAR PURPOSE. See LICENSE for details.
+
+Corresponding source and build instructions:
+https://github.com/bomomoQWQ/zaizuo
+Release packages identify the corresponding source tag and download URL.
+When distributing modified versions, preserve applicable notices and
+supply the corresponding source as required by the license. For modified
+versions supporting remote network interaction, see AGPL section 13.
+
+Third-party components, generated Flutter template portions, toolchains,
+runtimes, dependencies, and their original copyright/license notices
+retain their respective licenses. This project notice does not relicense
+third-party material. Binary distributions include applicable third-party
+notices separately. No NapCat implementation or license was copied into
+this independently developed project.
+
+The archived architecture discussion is historical documentation, not a
+security specification or a guarantee of implemented behavior.

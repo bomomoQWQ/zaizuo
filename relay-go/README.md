@@ -1,6 +1,6 @@
 # 在座 · Go 独立哑中继（robust 原型）
 
-模块名 `example.com/zaizuo/relay-go` 是本地标识，不假设已有远端仓库。实现独立编写，WebSocket 使用成熟依赖 `github.com/gorilla/websocket v1.5.3`，HTTP 使用 Go 标准库 `net/http`，不复制 NapCat 代码或许可证。项目新许可证仍由用户决定。
+模块名 `example.com/zaizuo/relay-go` 是本地标识，不假设已有远端仓库。实现独立编写，WebSocket 使用成熟依赖 `github.com/gorilla/websocket v1.5.3`，HTTP 使用 Go 标准库 `net/http`，不复制 NapCat 代码或许可证。本项目原创代码采用 [AGPL-3.0-only](../LICENSE)，见[版权及第三方声明](../NOTICE)；gorilla/websocket等依赖保留其各自许可证。
 
 遵循 [哑中继协议 v1](../docs/中继协议-v1.md)，测试直接读取 [共享向量](../protocol/relay-v1-cases.json)。本组件不是账号系统、聊天历史库或加密 SDK。
 
