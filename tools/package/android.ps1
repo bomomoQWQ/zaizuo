@@ -7,7 +7,7 @@ param(
     [string]$JavaHome = 'C:\Program Files\Java\jdk-17',
     [string]$ExistingAndroidSdk = 'C:\Users\16706\AppData\Local\Android\Sdk',
     [ValidateSet('android-arm64', 'android-x64')][string]$Target = 'android-arm64',
-    [ValidatePattern('^[0-9][0-9A-Za-z.+-]{0,63}$')][string]$Version = '0.1.0-media-test3',
+    [ValidatePattern('^[0-9][0-9A-Za-z.+-]{0,63}$')][string]$Version = '0.1.0-android-git-dev1',
     [switch]$PrepareSdk,
     [switch]$SkipTests
 )
@@ -23,7 +23,7 @@ if (-not (Test-Path -LiteralPath $flutter) -or -not (Test-Path -LiteralPath $jav
     throw 'Need the verified portable Flutter checkout and JDK17; do not use the default Java9.'
 }
 if ($PrepareSdk) {
-    $components = @('licenses','platform-tools','platforms\android-36','build-tools\36.0.0','cmdline-tools\latest','ndk\28.2.13676358')
+    $components = @('licenses','platform-tools','platforms\android-35','platforms\android-36','cmake\3.22.1','build-tools\36.0.0','cmdline-tools\latest','ndk\28.2.13676358')
     foreach ($component in $components) {
         $source = Join-Path $ExistingAndroidSdk $component
         $destination = Join-Path $android $component
@@ -33,14 +33,14 @@ if ($PrepareSdk) {
         Copy-Item -LiteralPath $source -Destination $destination -Recurse
     }
 }
-foreach ($component in @('licenses\android-sdk-license','platforms\android-36\android.jar','build-tools\36.0.0\aapt2.exe','build-tools\36.0.0\apksigner.bat','ndk\28.2.13676358\source.properties')) {
+foreach ($component in @('licenses\android-sdk-license','platforms\android-35\android.jar','platforms\android-36\android.jar','cmake\3.22.1\bin\cmake.exe','build-tools\36.0.0\aapt2.exe','build-tools\36.0.0\apksigner.bat','ndk\28.2.13676358\source.properties')) {
     if (-not (Test-Path -LiteralPath (Join-Path $android $component))) {
-        throw 'Isolated Android SDK incomplete. Need platform/build-tools 36 and NDK 28.2.13676358. PrepareSdk only copies already installed components; explicitly prepare missing versions under this isolated SDK after license review. This script does not download or accept licenses.'
+        throw 'Isolated Android SDK incomplete. Need platforms 35/36, CMake 3.22.1, build-tools 36 and NDK 28.2.13676358. PrepareSdk only copies already installed components; explicitly prepare missing versions under this isolated SDK after license review. This script does not download or accept licenses.'
     }
 }
 $app = Join-Path $root 'apps\mobile_probe'
 $pubspec = Get-Content -LiteralPath (Join-Path $app 'pubspec.yaml') -Raw
-if ($pubspec -notmatch '(?m)^version: 0\.1\.0\+2\s*$') { throw 'Expected mobile probe version 0.1.0+2 for the media-test3 APK.' }
+if ($pubspec -notmatch '(?m)^version: 0\.1\.0\+3\s*$') { throw 'Expected mobile Git development probe version 0.1.0+3.' }
 $licensePairs = @(
     @{ Source = 'LICENSE'; Asset = 'assets/licenses/AGPL-3.0-only.txt' },
     @{ Source = 'NOTICE'; Asset = 'assets/licenses/NOTICE.txt' }
@@ -56,9 +56,11 @@ foreach ($pair in $licensePairs) {
     }
     if ($pubspec -notmatch ('(?m)^\s+-\s+' + [regex]::Escape($pair.Asset) + '\s*$')) { throw "License asset not declared in pubspec: $($pair.Asset)" }
 }
+# A moving main URL cannot identify corresponding release source. Require a
+# verified immutable tag before this distribution packager may produce an APK.
 $sourceUrl = "https://github.com/bomomoQWQ/zaizuo/tree/v$Version"
 if (-not (Get-Content -LiteralPath (Join-Path $app 'lib\project_licenses.dart') -Raw).Contains($sourceUrl)) {
-    throw 'The in-app corresponding-source URL must match the package Version/tag. Update the release metadata and tests together.'
+    throw 'Development checkout has no immutable corresponding-source tag. Use direct build for local testing only; do not distribute via this packager until source/tag and native provenance are verified.'
 }
 $out = Join-Path $root 'dist\packages'
 $destination = Join-Path $out "zaizuo-mobile-probe-$Version-$Target-debug.apk"

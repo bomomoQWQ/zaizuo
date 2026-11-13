@@ -1,0 +1,329 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:path/path.dart' as p;
+import 'git_backend.dart';
+import 'git_sync.dart' show GitSyncException;
+
+/// Desktop implementation. No inherited Git configuration or shell evaluation.
+class GitCliBackend implements GitBackend {
+  final String executable;
+  GitCliBackend({this.executable = 'git'});
+  late String _root;
+  late String _remote;
+  late Map<String, String> _environment;
+  List<String> _helpers = [];
+  bool _opened = false;
+  bool _closed = false;
+  String get _metadata => p.join(_root, '.git', 'zaizuo-sync');
+
+  @override
+  Future<void> open(
+      {required String worktreePath,
+      required String remoteUrl,
+      required bool create}) async {
+    if (_opened) throw StateError('Git backend already bound');
+    _opened = true;
+    _root = worktreePath;
+    _remote = remoteUrl;
+    _environment = cleanEnvironment();
+    if (remoteUrl.startsWith('https://'))
+      _helpers = await readCredentialHelpers(executable, _environment);
+    if (create)
+      await _run([
+        'init',
+        '--template=',
+        '--object-format=sha1',
+        '--initial-branch=main',
+        _root
+      ]);
+  }
+
+  Future<ProcessResult> _run(List<String> args,
+      {Set<int> allowed = const {0},
+      Map<String, String>? environment,
+      bool binary = false}) async {
+    if (!_opened || _closed) throw StateError('Git backend is not open');
+    final command = <String>[
+      '--no-pager',
+      '--no-replace-objects',
+      '-c',
+      'core.hooksPath=${p.join(_metadata, 'empty-hooks')}',
+      '-c',
+      'protocol.allow=never',
+      '-c',
+      'protocol.file.allow=always',
+      '-c',
+      'protocol.https.allow=always',
+      '-c',
+      'protocol.ssh.allow=always',
+      '-c',
+      'protocol.ext.allow=never',
+      '-c',
+      'fetch.recurseSubmodules=false',
+      '-c',
+      'submodule.recurse=false',
+      '-c',
+      'gc.auto=0',
+      '-c',
+      'maintenance.auto=false',
+      '-c',
+      'commit.gpgSign=false',
+      '-c',
+      'tag.gpgSign=false',
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'core.untrackedCache=false',
+      '-c',
+      'credential.helper=',
+      for (final helper in _helpers) ...['-c', 'credential.helper=$helper'],
+      '-C',
+      _root,
+      ...args,
+    ];
+    ProcessResult result;
+    try {
+      result = await Process.run(executable, command,
+          environment: {..._environment, ...?environment},
+          includeParentEnvironment: false,
+          runInShell: false,
+          stdoutEncoding: binary ? null : utf8,
+          stderrEncoding: utf8);
+    } on ProcessException {
+      throw const GitSyncException(
+          'git_unavailable', '无法启动系统Git；请检查安装与受信任的可执行路径');
+    }
+    if (!allowed.contains(result.exitCode))
+      throw GitSyncException(
+          'git_failed', 'Git ${args.first}失败（退出码${result.exitCode}）');
+    return result;
+  }
+
+  @override
+  Future<String?> getRef(String ref) async {
+    final r =
+        await _run(['rev-parse', '--verify', '--quiet', ref], allowed: {0, 1});
+    return r.exitCode == 1 ? null : (r.stdout as String).trim();
+  }
+
+  @override
+  Future<void> updateRef(String ref, String oid, {String? expectedOld}) async {
+    await _run(['update-ref', ref, oid, if (expectedOld != null) expectedOld]);
+  }
+
+  @override
+  Future<void> deleteRef(String ref) async {
+    await _run(['update-ref', '-d', ref]);
+  }
+
+  @override
+  Future<Map<String, String>> listRefs(String prefix) async =>
+      _parseRefs((await _run(
+              ['for-each-ref', '--format=%(objectname) %(refname)', prefix]))
+          .stdout as String);
+  Map<String, String> _parseRefs(String text) {
+    final result = <String, String>{};
+    for (final line in const LineSplitter().convert(text)) {
+      if (line.isEmpty) continue;
+      final match = RegExp(r'^([a-f0-9]{40})\s+(\S+)$').firstMatch(line);
+      if (match == null || result.containsKey(match.group(2)))
+        throw const GitSyncException('invalid_ref', 'Git引用格式无效');
+      result[match.group(2)!] = match.group(1)!;
+    }
+    return result;
+  }
+
+  @override
+  Future<bool> isAncestor(String oldOid, String newOid) async =>
+      (await _run(['merge-base', '--is-ancestor', oldOid, newOid],
+              allowed: {0, 1}))
+          .exitCode ==
+      0;
+  @override
+  Future<GitObjectInfo> objectInfo(String oidOrPath) async => GitObjectInfo(
+      (await _run(['cat-file', '-t', oidOrPath])).stdout.toString().trim(),
+      int.parse((await _run(['cat-file', '-s', oidOrPath]))
+          .stdout
+          .toString()
+          .trim()));
+  @override
+  Future<Uint8List> readBlob(String oidOrPath) async => Uint8List.fromList(
+      (await _run(['cat-file', 'blob', oidOrPath], binary: true)).stdout
+          as List<int>);
+  @override
+  Future<List<GitTreeEntry>> listTree(String commit,
+      {required bool recursive}) async {
+    final text = (await _run(
+            ['ls-tree', if (recursive) '-r', '-z', '--full-tree', commit]))
+        .stdout as String;
+    final result = <GitTreeEntry>[];
+    for (final entry in text.split('\u0000')) {
+      if (entry.isEmpty) continue;
+      final match =
+          RegExp(r'^([0-9]+) ([a-z]+) ([a-f0-9]{40})\t(.+)$').firstMatch(entry);
+      if (match == null)
+        throw const GitSyncException('invalid_tree', 'Git树格式无效');
+      result.add(GitTreeEntry(
+          mode: match.group(1)!,
+          type: match.group(2)!,
+          oid: match.group(3)!,
+          path: match.group(4)!));
+    }
+    return result;
+  }
+
+  @override
+  Future<String> createBlob(Uint8List bytes) async {
+    final temp = await Directory(_metadata).createTemp('blob-');
+    try {
+      final file = File(p.join(temp.path, 'blob'));
+      await file.writeAsBytes(bytes, flush: true);
+      return (await _run(
+              ['hash-object', '-w', '--no-filters', '--', file.path]))
+          .stdout
+          .toString()
+          .trim();
+    } finally {
+      await temp.delete(recursive: true);
+    }
+  }
+
+  @override
+  Future<String> createTree(Map<String, String> blobs) async {
+    final temp = await Directory(_metadata).createTemp('tree-');
+    final env = {'GIT_INDEX_FILE': p.join(temp.path, 'index')};
+    try {
+      await _run(['read-tree', '--empty'], environment: env);
+      for (final entry in blobs.entries) {
+        await _run([
+          'update-index',
+          '--add',
+          '--cacheinfo',
+          '100644,${entry.value},${entry.key}'
+        ], environment: env);
+      }
+      return (await _run(['write-tree'], environment: env))
+          .stdout
+          .toString()
+          .trim();
+    } finally {
+      await temp.delete(recursive: true);
+    }
+  }
+
+  @override
+  Future<String> createCommit(
+          {required String tree,
+          required List<String> parents,
+          required String message,
+          required String authorName,
+          required String authorEmail,
+          required String committerName,
+          required String committerEmail,
+          String? authorDate,
+          String? committerDate}) async =>
+      (await _run([
+        'commit-tree',
+        tree,
+        for (final parent in parents) ...['-p', parent],
+        '-m',
+        message
+      ], environment: {
+        'GIT_AUTHOR_NAME': authorName,
+        'GIT_AUTHOR_EMAIL': authorEmail,
+        'GIT_COMMITTER_NAME': committerName,
+        'GIT_COMMITTER_EMAIL': committerEmail,
+        if (authorDate != null) 'GIT_AUTHOR_DATE': authorDate,
+        if (committerDate != null) 'GIT_COMMITTER_DATE': committerDate
+      }))
+          .stdout
+          .toString()
+          .trim();
+  @override
+  Future<Map<String, String>> advertise(String refPattern) async => _parseRefs(
+      (await _run(['ls-remote', '--refs', '--', _remote, refPattern])).stdout
+          as String);
+  @override
+  Future<void> fetch(String refspec) async {
+    await _run([
+      'fetch',
+      '--no-tags',
+      '--no-recurse-submodules',
+      '--no-write-fetch-head',
+      '--',
+      _remote,
+      refspec
+    ]);
+  }
+
+  @override
+  Future<void> push(String refspec) async {
+    await _run(['push', '--no-verify', '--', _remote, refspec]);
+  }
+
+  @override
+  Future<void> close() async {
+    _closed = true;
+  }
+
+  static Map<String, String> cleanEnvironment() {
+    final env = <String, String>{};
+    for (final entry in Platform.environment.entries) {
+      final n = entry.key.toUpperCase();
+      if (!n.startsWith('GIT_') && !n.startsWith('GCM_'))
+        env[entry.key] = entry.value;
+    }
+    final nullFile = Platform.isWindows ? 'NUL' : '/dev/null';
+    env.addAll({
+      'GIT_CONFIG_NOSYSTEM': '1',
+      'GIT_CONFIG_GLOBAL': nullFile,
+      'GIT_CONFIG_SYSTEM': nullFile,
+      'GIT_TERMINAL_PROMPT': '0',
+      'GIT_NO_REPLACE_OBJECTS': '1',
+      'GIT_OPTIONAL_LOCKS': '0',
+      'GIT_ATTR_NOSYSTEM': '1',
+      'GIT_SSH_VARIANT': 'ssh',
+      'GIT_SSH_COMMAND':
+          'ssh -oBatchMode=yes -oPermitLocalCommand=no -oClearAllForwardings=yes'
+    });
+    return env;
+  }
+
+  static Future<List<String>> readCredentialHelpers(
+      String executable, Map<String, String> environment) async {
+    final result = <String>[];
+    for (final scope in ['--system', '--global']) {
+      final env = Map<String, String>.from(environment)
+        ..remove('GIT_CONFIG_NOSYSTEM')
+        ..remove('GIT_CONFIG_GLOBAL')
+        ..remove('GIT_CONFIG_SYSTEM');
+      ProcessResult query;
+      try {
+        query = await Process.run(
+            executable, ['config', scope, '--get-all', 'credential.helper'],
+            environment: env,
+            includeParentEnvironment: false,
+            runInShell: false);
+      } on ProcessException {
+        throw const GitSyncException('git_unavailable', '无法读取系统Git凭据助手');
+      }
+      if (query.exitCode != 0 && query.exitCode != 1)
+        throw const GitSyncException(
+            'credential_configuration', '无法安全读取系统Git凭据助手');
+      for (final helper
+          in const LineSplitter().convert(query.stdout as String)) {
+        if (helper.isEmpty) {
+          result.clear();
+          continue;
+        }
+        if (!RegExp(r'^[A-Za-z0-9_.-]+(?: --?[A-Za-z0-9_.=-]+)*$')
+            .hasMatch(helper))
+          throw const GitSyncException(
+              'credential_configuration', '不支持shell式凭据助手；请使用系统标准helper');
+        result.add(helper);
+      }
+    }
+    return result;
+  }
+}

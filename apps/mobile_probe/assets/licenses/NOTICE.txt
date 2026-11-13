@@ -30,5 +30,22 @@ third-party material. Binary distributions include applicable third-party
 notices separately. No NapCat implementation or license was copied into
 this independently developed project.
 
+Embedded Git third-party materials are inventoried in
+third_party/native_git/SOURCES.md and native-manifest.json. Their full
+license texts are retained under third_party/native_git/licenses/:
+git2dart and git2dart_binaries wrapper code (MIT); libgit2 (GPL version 2
+only with its upstream linking exception and bundled-component notices);
+OpenSSL 3 (Apache License 2.0); libssh2 (BSD-3-Clause); Mozilla-derived CA
+data (MPL 2.0). This is not a statement that every binary's complete source
+correspondence or final APK inventory has been verified. See SOURCES.md
+for evidence, source locations, and remaining distribution requirements.
+Native binaries and CA data are not relicensed under the project's AGPL.
+
+This product includes software developed by Rich Salz.
+This product includes cryptographic software written by
+Eric Young (eay@cryptsoft.com).
+This product includes software developed by the OpenSSL Project for use
+in the OpenSSL Toolkit (http://www.openssl.org/).
+
 The archived architecture discussion is historical documentation, not a
 security specification or a guarantee of implemented behavior.

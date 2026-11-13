@@ -118,9 +118,6 @@ class ProbeService {
     );
   }
 
-  /// No Process.start('git') probes in an Android app. A process-based Git
-  /// implementation is explicitly unavailable until a mobile adapter exists.
-  String get gitStatus => Platform.isAndroid
-      ? 'Android Git 适配器未实现：不可同步，不是跨电脑 IM。'
-      : '此验证壳未配置 Git；不尝试系统 Git 或远程访问。';
+  /// Image round-trip remains independent of the explicitly configured Git node.
+  String get gitStatus => '图片往返不联网；未配置 Git 时不会远程访问。\n嵌入式 Git 的真实配置/状态见下方手动测试区。';
 }

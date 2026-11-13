@@ -29,8 +29,8 @@ void main() {
     await tester.pumpWidget(const MobileProbe());
     await tester.pumpAndSettle();
     expect(find.text('在座 · Android 验证壳'), findsOneWidget);
-    expect(find.textContaining('非完整 IM'), findsOneWidget);
-    expect(find.textContaining('未配置 Git'), findsOneWidget);
+    expect(find.textContaining('非完整 IM'), findsWidgets);
+    expect(find.textContaining('未配置 Git'), findsWidgets);
     expect(find.textContaining('内置 PNG'), findsOneWidget);
   });
 
@@ -68,13 +68,10 @@ void main() {
       thirdParty,
       contains('Redistribution and use in source and binary forms'),
     );
-    expect(
-      projectSourceUrl,
-      'https://github.com/bomomoQWQ/zaizuo/tree/v0.1.0-media-test3',
-    );
+    expect(projectSourceUrl, 'https://github.com/bomomoQWQ/zaizuo/tree/main');
   });
 
-  testWidgets('许可入口离线展示完整AGPL和NOTICE及test3源码地址', (tester) async {
+  testWidgets('许可入口离线展示完整AGPL和NOTICE及开发源码地址', (tester) async {
     const channel = MethodChannel('zaizuo.mobile_probe/native');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async => null);

@@ -8,6 +8,8 @@ import 'package:path/path.dart' as p;
 import 'codec.dart';
 import 'config.dart';
 import 'events.dart';
+import 'git_backend.dart';
+import 'git_cli_backend.dart';
 import 'store.dart';
 
 /// A deliberately small error surface: never include git's stderr or credentials.
@@ -35,8 +37,7 @@ class GitSync {
   final int maxSegmentBytes;
   final int maxDevices;
   final String gitExecutable;
-  final List<String> _credentialHelpers;
-  final Map<String, String> _environment;
+  final GitBackend _backend;
   bool _closed = false;
 
   GitSync._(
@@ -48,8 +49,7 @@ class GitSync {
     this.maxSegmentBytes,
     this.maxDevices,
     this.gitExecutable,
-    this._credentialHelpers,
-    this._environment,
+    this._backend,
   );
 
   String get branchRef => 'refs/heads/dev/$deviceId';
@@ -78,6 +78,32 @@ class GitSync {
     int maxDevices = 1024,
     String gitExecutable = 'git',
   }) async {
+    return initializeWithBackend(
+        backend: GitCliBackend(executable: gitExecutable),
+        worktree: worktree,
+        remoteUrl: remoteUrl,
+        deviceId: deviceId,
+        segmentSize: segmentSize,
+        maxEvents: maxEvents,
+        maxSegmentBytes: maxSegmentBytes,
+        maxDevices: maxDevices,
+        gitExecutable: gitExecutable);
+  }
+
+  /// Uses a trusted, single-owner plumbing implementation bound to this clone.
+  /// Signature, canonical archive, checkpoint and local filesystem validation
+  /// remain here; callers must not share a backend between GitSync instances.
+  static Future<GitSync> initializeWithBackend({
+    required GitBackend backend,
+    required Directory worktree,
+    required String remoteUrl,
+    required String deviceId,
+    int segmentSize = 32,
+    int maxEvents = 100000,
+    int maxSegmentBytes = 64 * 1024 * 1024,
+    int maxDevices = 1024,
+    String gitExecutable = 'git',
+  }) async {
     if (!_device.hasMatch(deviceId)) {
       throw ArgumentError.value(deviceId, 'deviceId', '需要64位小写十六进制设备编号');
     }
@@ -91,53 +117,60 @@ class GitSync {
     final remote = await _validateRemote(remoteUrl);
     await worktree.create(recursive: true);
     final root = Directory(await worktree.resolveSymbolicLinks());
-    final environment = _cleanEnvironment();
-    final helpers = remote.startsWith('https://')
-        ? await _readCredentialHelpers(gitExecutable, environment)
-        : <String>[];
     final sync = GitSync._(root, remote, deviceId, segmentSize, maxEvents,
-        maxSegmentBytes, maxDevices, gitExecutable, helpers, environment);
-    await sync._exclusive(() async {
-      final gitDir = Directory(p.join(root.path, '.git'));
-      if (!await gitDir.exists()) {
-        if (!await root.list(followLinks: false).isEmpty) {
-          throw const GitSyncException(
-              'unmanaged_repository', '同步目录必须为空；不接管用户仓库');
+        maxSegmentBytes, maxDevices, gitExecutable, backend);
+    try {
+      await sync._exclusive(() async {
+        final gitDir = Directory(p.join(root.path, '.git'));
+        final create = !await gitDir.exists();
+        if (create) {
+          if (!await root.list(followLinks: false).isEmpty) {
+            throw const GitSyncException(
+                'unmanaged_repository', '同步目录必须为空；不接管用户仓库');
+          }
+          await backend.open(
+              worktreePath: root.path, remoteUrl: remote, create: true);
+          await sync._metadata.create(recursive: true);
+          await sync._noHooks.create();
+          await sync._config.writeAsString(_configText, flush: true);
+          await File(p.join(sync._metadata.path, 'identity.json'))
+              .writeAsString(
+            canonicalJson({
+              'version': 1,
+              'remote': remote,
+              'device': deviceId,
+              'segment_size': segmentSize
+            }),
+            flush: true,
+          );
+          await sync._writePins(_Pins(null, {}));
         }
-        await sync._run([
-          'init',
-          '--template=',
-          '--object-format=sha1',
-          '--initial-branch=main',
-          root.path,
-        ], bootstrap: true);
-        await sync._metadata.create(recursive: true);
-        await sync._noHooks.create();
-        await sync._config.writeAsString(_configText, flush: true);
-        await File(p.join(sync._metadata.path, 'identity.json')).writeAsString(
-          canonicalJson({
-            'version': 1,
-            'remote': remote,
-            'device': deviceId,
-            'segment_size': segmentSize
-          }),
-          flush: true,
-        );
-        await sync._writePins(_Pins(null, {}));
-      }
-      await sync._assertManaged();
-      final identity = jsonObject(await File(
-        p.join(sync._metadata.path, 'identity.json'),
-      ).readAsString());
-      if (identity['version'] != 1 ||
-          identity['remote'] != remote ||
-          identity['device'] != deviceId ||
-          identity['segment_size'] != segmentSize) {
-        throw const GitSyncException(
-            'repository_identity', '同步目录的远端/设备/分段配置不匹配');
-      }
-      await sync._readPins();
-    });
+        await sync._assertManaged();
+        final identity = jsonObject(await File(
+          p.join(sync._metadata.path, 'identity.json'),
+        ).readAsString());
+        if (identity['version'] != 1 ||
+            identity['remote'] != remote ||
+            identity['device'] != deviceId ||
+            identity['segment_size'] != segmentSize) {
+          throw const GitSyncException(
+              'repository_identity', '同步目录的远端/设备/分段配置不匹配');
+        }
+        await sync._readPins();
+        // Validate identity and pins before a supplied backend can perform I/O.
+        if (!create) {
+          await backend.open(
+              worktreePath: root.path, remoteUrl: remote, create: false);
+        }
+      });
+    } catch (_) {
+      // Initialization may fail after acquiring native repository owners. Never
+      // replace the original identity/configuration failure with cleanup errors.
+      try {
+        await backend.close();
+      } catch (_) {}
+      rethrow;
+    }
     return sync;
   }
 
@@ -176,23 +209,14 @@ class GitSync {
         if (added > 0) newHead = await _commit(own, parent);
         if (newHead != null) {
           if (newHead != localHead) {
-            await _run([
-              'update-ref',
-              branchRef,
-              newHead,
-              localHead ?? '0000000000000000000000000000000000000000'
-            ]);
+            await _git(() => _backend.updateRef(branchRef, newHead!,
+                expectedOld:
+                    localHead ?? '0000000000000000000000000000000000000000'));
           }
           // No '+', --force or arbitrary destination ref. Local receive-pack
           // does NOT inherit -c core.hooksPath, so inspect the bare side too.
           await _assertLocalRemoteSafe();
-          await _run([
-            'push',
-            '--no-verify',
-            '--',
-            remoteUrl,
-            '$branchRef:$branchRef'
-          ]);
+          await _git(() => _backend.push('$branchRef:$branchRef'));
           // Verify what the remote advertises after the write. An ambiguous network
           // failure leaves pins unchanged; retry safely reuses the local commit.
           final after = await _fetch(pins);
@@ -321,21 +345,12 @@ class GitSync {
         final newHead =
             added == 0 ? parent! : await _commitManifests(history, parent);
         if (localHead != newHead) {
-          await _run([
-            'update-ref',
-            'refs/heads/main',
-            newHead,
-            localHead ?? '0000000000000000000000000000000000000000'
-          ]);
+          await _git(() => _backend.updateRef('refs/heads/main', newHead,
+              expectedOld:
+                  localHead ?? '0000000000000000000000000000000000000000'));
         }
         await _assertLocalRemoteSafe();
-        await _run([
-          'push',
-          '--no-verify',
-          '--',
-          remoteUrl,
-          'refs/heads/main:refs/heads/main'
-        ]);
+        await _git(() => _backend.push('refs/heads/main:refs/heads/main'));
         final afterHead = await _fetchMain(checkpoint);
         if (afterHead == null || !await _ancestor(newHead, afterHead)) {
           throw const GitSyncException('push_not_observed', '远端未保留刚发布的主分支');
@@ -383,18 +398,15 @@ class GitSync {
           throw const GitSyncException(
               'attachment_collision', '本地附件引用已被其他内容占用');
         }
-        await _run([
-          'update-ref',
-          ref,
-          head,
-          localHead ?? '0000000000000000000000000000000000000000'
-        ]);
+        await _git(() => _backend.updateRef(ref, head,
+            expectedOld:
+                localHead ?? '0000000000000000000000000000000000000000'));
         await _assertLocalRemoteSafe();
         // Deterministic root commit makes honest concurrent identical publishers
         // choose the same head. Never force or replace an occupied attachment ref.
         GitSyncException? pushFailure;
         try {
-          await _run(['push', '--no-verify', '--', remoteUrl, '$ref:$ref']);
+          await _git(() => _backend.push('$ref:$ref'));
         } on GitSyncException catch (error) {
           if (error.code != 'git_failed') rethrow;
           // Two honest writers can race the bare ref lock even with identical
@@ -438,6 +450,7 @@ class GitSync {
 
   /// Waits for already queued work; does not remove clone, pins or lock file.
   Future<void> close() => _exclusive(() async {
+        if (!_closed) await _backend.close();
         _closed = true;
       });
 
@@ -510,94 +523,29 @@ class GitSync {
     }
   }
 
-  Future<ProcessResult> _run(
-    List<String> arguments, {
-    bool bootstrap = false,
-    Set<int> allowed = const {0},
-    Map<String, String>? environment,
-    bool binaryOutput = false,
-  }) async {
-    if (!bootstrap) await _assertManaged();
-    final command = <String>[
-      '--no-pager',
-      '--no-replace-objects',
-      '-c',
-      'core.hooksPath=${_noHooks.path}',
-      '-c',
-      'protocol.allow=never',
-      '-c',
-      'protocol.file.allow=always',
-      '-c',
-      'protocol.https.allow=always',
-      '-c',
-      'protocol.ssh.allow=always',
-      '-c',
-      'protocol.ext.allow=never',
-      '-c',
-      'fetch.recurseSubmodules=false',
-      '-c',
-      'submodule.recurse=false',
-      '-c',
-      'gc.auto=0',
-      '-c',
-      'maintenance.auto=false',
-      '-c',
-      'commit.gpgSign=false',
-      '-c',
-      'tag.gpgSign=false',
-      '-c',
-      'core.fsmonitor=false',
-      '-c',
-      'core.untrackedCache=false',
-      '-c',
-      'credential.helper=',
-      for (final helper in _credentialHelpers) ...[
-        '-c',
-        'credential.helper=$helper'
-      ],
-      '-C',
-      worktree.path,
-      ...arguments,
-    ];
-    ProcessResult result;
-    try {
-      result = await Process.run(
-        gitExecutable,
-        command,
-        environment: {..._environment, ...?environment},
-        includeParentEnvironment: false,
-        runInShell: false,
-        stdoutEncoding: binaryOutput ? null : utf8,
-        stderrEncoding: utf8,
-      );
-    } on ProcessException {
-      throw const GitSyncException(
-          'git_unavailable', '无法启动系统Git；请检查安装与受信任的可执行路径');
-    }
-    if (!allowed.contains(result.exitCode)) {
-      // Deliberately do not expose stderr, argv or URLs: helper/server errors
-      // can contain credentials. Callers receive a stable operation name only.
-      throw GitSyncException(
-          'git_failed', 'Git ${arguments.first}失败（退出码${result.exitCode}）');
-    }
-    return result;
+  Future<T> _git<T>(Future<T> Function() action) async {
+    await _assertManaged();
+    return action();
+  }
+
+  Future<String> _treeListing(String head, {required bool recursive}) async {
+    final entries =
+        await _git(() => _backend.listTree(head, recursive: recursive));
+    return entries
+        .map((e) => '${e.mode} ${e.type} ${e.oid}\t${e.path}\u0000')
+        .join();
   }
 
   Future<String?> _localHead(String ref) async {
-    final result =
-        await _run(['rev-parse', '--verify', '--quiet', ref], allowed: {0, 1});
-    if (result.exitCode == 1) return null;
-    final head = (result.stdout as String).trim();
-    if (!_oid.hasMatch(head))
+    final head = await _git(() => _backend.getRef(ref));
+    if (head != null && !_oid.hasMatch(head)) {
       throw const GitSyncException('invalid_ref', 'Git分支头格式无效');
+    }
     return head;
   }
 
-  Future<bool> _ancestor(String oldHead, String newHead) async {
-    final result = await _run(['merge-base', '--is-ancestor', oldHead, newHead],
-        allowed: {0, 1});
-    return result.exitCode == 0;
-  }
+  Future<bool> _ancestor(String oldHead, String newHead) =>
+      _git(() => _backend.isAncestor(oldHead, newHead));
 
   Future<Map<String, String>> _fetch(_Pins pins) async {
     final incoming = 'refs/zaizuo-incoming/${randomId(12)}';
@@ -606,21 +554,11 @@ class GitSync {
       // A fresh namespace is important: a deleted remote branch must not be
       // hidden by a stale remote-tracking ref. Force applies ONLY to this
       // disposable namespace, never to a published device branch.
-      await _run([
-        'fetch',
-        '--no-tags',
-        '--no-recurse-submodules',
-        '--no-write-fetch-head',
-        '--',
-        remoteUrl,
-        '+refs/heads/dev/*:$incoming/*'
-      ]);
-      final output = (await _run([
-        'for-each-ref',
-        '--format=%(refname) %(objectname)',
-        '$incoming/'
-      ]))
-          .stdout as String;
+      await _git(() => _backend.fetch('+refs/heads/dev/*:$incoming/*'));
+      final output = (await _git(() => _backend.listRefs('$incoming/')))
+          .entries
+          .map((e) => '${e.key} ${e.value}')
+          .join('\n');
       final fetched = <String, String>{};
       for (final line in const LineSplitter().convert(output)) {
         if (line.isEmpty) continue;
@@ -637,7 +575,8 @@ class GitSync {
         if (fetched.length > maxDevices) {
           throw const GitSyncException('archive_limit', '远端设备分支数超过上限');
         }
-        if ((await _run(['cat-file', '-t', fields[1]])).stdout != 'commit\n') {
+        if ('${(await _git(() => _backend.objectInfo(fields[1]))).type}\n' !=
+            'commit\n') {
           throw const GitSyncException('invalid_ref', '设备分支必须指向commit');
         }
       }
@@ -655,10 +594,10 @@ class GitSync {
       // Retained pins also have private refs, so pruning these temporary refs
       // does not make the old pinned commit eligible for garbage collection.
       final output =
-          (await _run(['for-each-ref', '--format=%(refname)', '$incoming/']))
-              .stdout as String;
+          (await _git(() => _backend.listRefs('$incoming/'))).keys.join('\n');
       for (final ref in const LineSplitter().convert(output)) {
-        if (ref.startsWith('$incoming/')) await _run(['update-ref', '-d', ref]);
+        if (ref.startsWith('$incoming/'))
+          await _git(() => _backend.deleteRef(ref));
       }
     }
   }
@@ -676,8 +615,7 @@ class GitSync {
 
   Future<List<EncryptedEvent>> _archive(
       String head, String origin, FileEventStore store) async {
-    final listing = (await _run(['ls-tree', '-r', '-z', '--full-tree', head]))
-        .stdout as String;
+    final listing = await _treeListing(head, recursive: true);
     final paths = <String>[];
     for (final entry in listing.split('\u0000')) {
       if (entry.isEmpty) continue;
@@ -704,13 +642,11 @@ class GitSync {
       }
       final spec = '$head:${paths[i]}';
       final size = int.tryParse(
-          ((await _run(['cat-file', '-s', spec])).stdout as String).trim());
+          (await _git(() => _backend.objectInfo(spec))).size.toString());
       if (size == null || size < 1 || size > maxSegmentBytes) {
         throw const GitSyncException('archive_limit', '归档分段大小超过上限或为空');
       }
-      final text =
-          (await _run(['show', '--no-ext-diff', '--no-textconv', spec])).stdout
-              as String;
+      final text = utf8.decode(await _git(() => _backend.readBlob(spec)));
       if (!text.endsWith('\n') || text.contains('\r')) {
         throw const GitSyncException('invalid_archive', 'JSONL必须为完整LF结尾记录');
       }
@@ -772,62 +708,36 @@ class GitSync {
   String _segmentPath(String origin, int index) =>
       'logs/$origin/${index.toString().padLeft(8, '0')}.jsonl';
 
+  Future<String> _checkedOid(Future<String> Function() action) async {
+    final oid = await _git(action);
+    if (!_oid.hasMatch(oid))
+      throw const GitSyncException('invalid_object', 'Git对象编号无效');
+    return oid;
+  }
+
   Future<String> _commit(List<EncryptedEvent> own, String? parent) async {
-    final temp = await Directory(_metadata.path).createTemp('transaction-');
-    final indexEnvironment = {'GIT_INDEX_FILE': p.join(temp.path, 'index')};
-    try {
-      await _run(['read-tree', '--empty'], environment: indexEnvironment);
-      for (var offset = 0; offset < own.length; offset += segmentSize) {
-        final end = offset + segmentSize < own.length
-            ? offset + segmentSize
-            : own.length;
-        final contents =
-            '${own.sublist(offset, end).map((e) => canonicalJson(e.toJson())).join('\n')}\n';
-        if (utf8.encode(contents).length > maxSegmentBytes) {
-          throw const GitSyncException('archive_limit', '输出归档分段超过大小上限');
-        }
-        final file = File(p.join(temp.path, 'blob'));
-        await file.writeAsString(contents, flush: true);
-        final blob = ((await _run(
-                    ['hash-object', '-w', '--no-filters', '--', file.path]))
-                .stdout as String)
-            .trim();
-        if (!_oid.hasMatch(blob))
-          throw const GitSyncException('invalid_object', 'Git对象编号无效');
-        await _run([
-          'update-index',
-          '--add',
-          '--cacheinfo',
-          '100644,$blob,${_segmentPath(deviceId, offset ~/ segmentSize)}'
-        ], environment: indexEnvironment);
-      }
-      final tree = ((await _run(['write-tree'], environment: indexEnvironment))
-              .stdout as String)
-          .trim();
-      if (!_oid.hasMatch(tree))
-        throw const GitSyncException('invalid_object', 'Git树编号无效');
-      final commit = ((await _run([
-        'commit-tree',
-        tree,
-        if (parent != null) ...['-p', parent],
-        '-m',
-        'zaizuo: encrypted device archive (${own.length} events)',
-      ], environment: {
-        'GIT_AUTHOR_NAME': 'zaizuo',
-        'GIT_AUTHOR_EMAIL': 'device@zaizuo.invalid',
-        'GIT_COMMITTER_NAME': 'zaizuo',
-        'GIT_COMMITTER_EMAIL': 'device@zaizuo.invalid',
-      }))
-              .stdout as String)
-          .trim();
-      if (!_oid.hasMatch(commit))
-        throw const GitSyncException('invalid_object', 'Git提交编号无效');
-      return commit;
-    } finally {
-      // This path was created by createTemp inside the private metadata folder.
-      if (p.dirname(temp.path) == _metadata.path)
-        await temp.delete(recursive: true);
+    final blobs = <String, String>{};
+    for (var offset = 0; offset < own.length; offset += segmentSize) {
+      final end = (offset + segmentSize < own.length)
+          ? offset + segmentSize
+          : own.length;
+      final contents =
+          '${own.sublist(offset, end).map((e) => canonicalJson(e.toJson())).join('\n')}\n';
+      final bytes = Uint8List.fromList(utf8.encode(contents));
+      if (bytes.length > maxSegmentBytes)
+        throw const GitSyncException('archive_limit', '输出归档分段超过大小上限');
+      blobs[_segmentPath(deviceId, offset ~/ segmentSize)] =
+          await _checkedOid(() => _backend.createBlob(bytes));
     }
+    final tree = await _checkedOid(() => _backend.createTree(blobs));
+    return _checkedOid(() => _backend.createCommit(
+        tree: tree,
+        parents: [if (parent != null) parent],
+        message: 'zaizuo: encrypted device archive (${own.length} events)',
+        authorName: 'zaizuo',
+        authorEmail: 'device@zaizuo.invalid',
+        committerName: 'zaizuo',
+        committerEmail: 'device@zaizuo.invalid'));
   }
 
   Future<_Pins> _readPins({String? community}) async {
@@ -862,11 +772,9 @@ class GitSync {
   Future<void> _writePins(_Pins pins) async {
     // Private refs retain pinned objects even if an external git gc is run.
     for (final entry in pins.refs.entries) {
-      await _run([
-        'update-ref',
-        'refs/zaizuo-pins/${entry.key.substring('refs/heads/dev/'.length)}',
-        entry.value
-      ]);
+      await _git(() => _backend.updateRef(
+          'refs/zaizuo-pins/${entry.key.substring('refs/heads/dev/'.length)}',
+          entry.value));
     }
     final temporary = File(p.join(_metadata.path, 'pins-${randomId(12)}.tmp'));
     await temporary.writeAsString(
@@ -879,70 +787,6 @@ class GitSync {
     // Same-directory rename replaces the file atomically on supported desktop
     // filesystems. Never delete the old pin file first.
     await temporary.rename(_pinsFile.path);
-  }
-
-  static Map<String, String> _cleanEnvironment() {
-    final environment = <String, String>{};
-    for (final entry in Platform.environment.entries) {
-      final name = entry.key.toUpperCase();
-      if (!name.startsWith('GIT_') && !name.startsWith('GCM_')) {
-        environment[entry.key] = entry.value;
-      }
-    }
-    final nullFile = Platform.isWindows ? 'NUL' : '/dev/null';
-    environment.addAll({
-      'GIT_CONFIG_NOSYSTEM': '1',
-      'GIT_CONFIG_GLOBAL': nullFile,
-      'GIT_CONFIG_SYSTEM': nullFile,
-      'GIT_TERMINAL_PROMPT': '0',
-      'GIT_NO_REPLACE_OBJECTS': '1',
-      'GIT_OPTIONAL_LOCKS': '0',
-      'GIT_ATTR_NOSYSTEM': '1',
-      'GIT_SSH_VARIANT': 'ssh',
-      'GIT_SSH_COMMAND':
-          'ssh -oBatchMode=yes -oPermitLocalCommand=no -oClearAllForwardings=yes',
-    });
-    return environment;
-  }
-
-  static Future<List<String>> _readCredentialHelpers(
-      String executable, Map<String, String> environment) async {
-    final result = <String>[];
-    for (final scope in ['--system', '--global']) {
-      final queryEnvironment = Map<String, String>.from(environment)
-        ..remove('GIT_CONFIG_NOSYSTEM')
-        ..remove('GIT_CONFIG_GLOBAL')
-        ..remove('GIT_CONFIG_SYSTEM');
-      ProcessResult query;
-      try {
-        query = await Process.run(
-            executable, ['config', scope, '--get-all', 'credential.helper'],
-            environment: queryEnvironment,
-            includeParentEnvironment: false,
-            runInShell: false);
-      } on ProcessException {
-        throw const GitSyncException('git_unavailable', '无法读取系统Git凭据助手');
-      }
-      if (query.exitCode != 0 && query.exitCode != 1) {
-        throw const GitSyncException(
-            'credential_configuration', '无法安全读取系统Git凭据助手');
-      }
-      for (final helper
-          in const LineSplitter().convert(query.stdout as String)) {
-        if (helper.isEmpty) {
-          result.clear();
-          continue;
-        }
-        // Do not execute !shell helpers or paths/options containing metacharacters.
-        if (!RegExp(r'^[A-Za-z0-9_.-]+(?: --?[A-Za-z0-9_.=-]+)*$')
-            .hasMatch(helper)) {
-          throw const GitSyncException(
-              'credential_configuration', '不支持shell式凭据助手；请使用系统标准helper');
-        }
-        result.add(helper);
-      }
-    }
-    return result;
   }
 
   void _validateAttachmentId(String objectId) {
@@ -999,12 +843,10 @@ class GitSync {
     if (kind == FileSystemEntityType.notFound) {
       final marker = await FileSystemEntity.type(_attachmentInitialized.path,
           followLinks: false);
-      final retained = (await _run([
-        'for-each-ref',
-        '--format=%(refname)',
-        'refs/zaizuo-attachment-pins/'
-      ]))
-          .stdout as String;
+      final retained =
+          (await _git(() => _backend.listRefs('refs/zaizuo-attachment-pins/')))
+              .keys
+              .join('\n');
       if (marker != FileSystemEntityType.notFound ||
           retained.trim().isNotEmpty) {
         throw const GitSyncException(
@@ -1039,11 +881,8 @@ class GitSync {
 
   Future<void> _writeAttachmentPins(Map<String, String> pins) async {
     for (final entry in pins.entries) {
-      await _run([
-        'update-ref',
-        'refs/zaizuo-attachment-pins/${entry.key}',
-        entry.value
-      ]);
+      await _git(() => _backend.updateRef(
+          'refs/zaizuo-attachment-pins/${entry.key}', entry.value));
     }
     final temporary =
         File(p.join(_metadata.path, 'attachment-pins-${randomId(12)}.tmp'));
@@ -1057,10 +896,10 @@ class GitSync {
       String objectId, String? pinnedHead) async {
     final ref = 'refs/heads/attachment/$objectId';
     await _assertLocalRemoteSafe();
-    final advertised =
-        ((await _run(['ls-remote', '--refs', '--', remoteUrl, ref])).stdout
-                as String)
-            .trim();
+    final advertised = (await _git(() => _backend.advertise(ref)))
+        .entries
+        .map((e) => '${e.value} ${e.key}')
+        .join('\n');
     if (advertised.isEmpty) {
       if (pinnedHead != null) {
         throw const GitSyncException('attachment_deleted', '已见附件分支被删除；拒绝重新发布');
@@ -1076,32 +915,24 @@ class GitSync {
     }
     final incoming = 'refs/zaizuo-attachment-incoming/${randomId(12)}';
     try {
-      await _run([
-        'fetch',
-        '--no-tags',
-        '--no-recurse-submodules',
-        '--no-write-fetch-head',
-        '--',
-        remoteUrl,
-        '+$ref:$incoming'
-      ]);
+      await _git(() => _backend.fetch('+$ref:$incoming'));
       final head = await _localHead(incoming);
       if (head == null || head != fields[0]) {
         throw const GitSyncException('attachment_rewrite', '附件分支在读取时发生变化');
       }
-      if ((await _run(['cat-file', '-t', head])).stdout != 'commit\n') {
+      if ('${(await _git(() => _backend.objectInfo(head))).type}\n' !=
+          'commit\n') {
         throw const GitSyncException('attachment_collision', '附件分支必须指向commit');
       }
       return head;
     } finally {
-      await _run(['update-ref', '-d', incoming]);
+      await _git(() => _backend.deleteRef(incoming));
     }
   }
 
   Future<Uint8List> _attachmentObject(
       String head, String objectId, int limit) async {
-    final listing =
-        (await _run(['ls-tree', '-z', '--full-tree', head])).stdout as String;
+    final listing = await _treeListing(head, recursive: false);
     final match = RegExp(r'^100644 blob ([a-f0-9]{40})\tobject\.bin\x00$')
         .firstMatch(listing);
     if (match == null) {
@@ -1111,12 +942,11 @@ class GitSync {
     // No event/descriptor/object name is executed; binary bytes bypass UTF-8.
     final blob = match.group(1)!;
     final size = int.tryParse(
-        ((await _run(['cat-file', '-s', blob])).stdout as String).trim());
+        (await _git(() => _backend.objectInfo(blob))).size.toString());
     if (size == null || size < 1 || size > limit || size > maxAttachmentBytes) {
       throw const GitSyncException('attachment_limit', '附件密文对象超过接收上限或为空');
     }
-    final result = await _run(['cat-file', 'blob', blob], binaryOutput: true);
-    final bytes = Uint8List.fromList(result.stdout as List<int>);
+    final bytes = await _git(() => _backend.readBlob(blob));
     if (bytes.length != size ||
         bytes.length > limit ||
         await sha256Hex(bytes) != objectId) {
@@ -1126,49 +956,19 @@ class GitSync {
   }
 
   Future<String> _commitAttachment(String objectId, Uint8List bytes) async {
-    final temp =
-        await Directory(_metadata.path).createTemp('attachment-transaction-');
-    final indexEnvironment = {'GIT_INDEX_FILE': p.join(temp.path, 'index')};
-    try {
-      await _run(['read-tree', '--empty'], environment: indexEnvironment);
-      final file = File(p.join(temp.path, 'ciphertext.snapshot'));
-      await file.writeAsBytes(bytes, flush: true);
-      final blob =
-          ((await _run(['hash-object', '-w', '--no-filters', '--', file.path]))
-                  .stdout as String)
-              .trim();
-      if (!_oid.hasMatch(blob))
-        throw const GitSyncException('invalid_object', '附件blob编号无效');
-      await _run(
-          ['update-index', '--add', '--cacheinfo', '100644,$blob,object.bin'],
-          environment: indexEnvironment);
-      final tree = ((await _run(['write-tree'], environment: indexEnvironment))
-              .stdout as String)
-          .trim();
-      if (!_oid.hasMatch(tree))
-        throw const GitSyncException('invalid_object', '附件tree编号无效');
-      final head = ((await _run([
-        'commit-tree',
-        tree,
-        '-m',
-        'zaizuo: ciphertext attachment $objectId'
-      ], environment: {
-        'GIT_AUTHOR_NAME': 'zaizuo',
-        'GIT_AUTHOR_EMAIL': 'attachment@zaizuo.invalid',
-        'GIT_COMMITTER_NAME': 'zaizuo',
-        'GIT_COMMITTER_EMAIL': 'attachment@zaizuo.invalid',
-        'GIT_AUTHOR_DATE': '946684800 +0000',
-        'GIT_COMMITTER_DATE': '946684800 +0000',
-      }))
-              .stdout as String)
-          .trim();
-      if (!_oid.hasMatch(head))
-        throw const GitSyncException('invalid_object', '附件commit编号无效');
-      return head;
-    } finally {
-      if (p.dirname(temp.path) == _metadata.path)
-        await temp.delete(recursive: true);
-    }
+    final blob = await _checkedOid(() => _backend.createBlob(bytes));
+    final tree =
+        await _checkedOid(() => _backend.createTree({'object.bin': blob}));
+    return _checkedOid(() => _backend.createCommit(
+        tree: tree,
+        parents: [],
+        message: 'zaizuo: ciphertext attachment $objectId',
+        authorName: 'zaizuo',
+        authorEmail: 'attachment@zaizuo.invalid',
+        committerName: 'zaizuo',
+        committerEmail: 'attachment@zaizuo.invalid',
+        authorDate: '946684800 +0000',
+        committerDate: '946684800 +0000'));
   }
 
   void _validateFingerprint(String fingerprint) {
@@ -1256,7 +1056,7 @@ class GitSync {
 
   Future<void> _writeCommunityCheckpoint(String fingerprint, String head,
       List<CommunityManifest> manifests) async {
-    await _run(['update-ref', 'refs/zaizuo-community-pin', head]);
+    await _git(() => _backend.updateRef('refs/zaizuo-community-pin', head));
     await _writeCommunityRecord(_CommunityCheckpoint(
         fingerprint,
         head,
@@ -1280,9 +1080,10 @@ class GitSync {
     await _assertLocalRemoteSafe();
     // ls-remote detects deletion without stale refs; fetch uses one exact
     // non-checkout ref and the observed head is re-checked after transfer.
-    final advertised = (await _run(
-            ['ls-remote', '--refs', '--', remoteUrl, 'refs/heads/main']))
-        .stdout as String;
+    final advertised = (await _git(() => _backend.advertise('refs/heads/main')))
+        .entries
+        .map((e) => '${e.value} ${e.key}')
+        .join('\n');
     if (advertised.trim().isEmpty) {
       if (checkpoint.head != null) {
         throw const GitSyncException('remote_deleted', '已钉住的main分支被删除');
@@ -1297,18 +1098,11 @@ class GitSync {
     }
     final incoming = 'refs/zaizuo-main-incoming/${randomId(12)}';
     try {
-      await _run([
-        'fetch',
-        '--no-tags',
-        '--no-recurse-submodules',
-        '--no-write-fetch-head',
-        '--',
-        remoteUrl,
-        '+refs/heads/main:$incoming'
-      ]);
+      await _git(() => _backend.fetch('+refs/heads/main:$incoming'));
       final head = await _localHead(incoming);
       if (head == null ||
-          (await _run(['cat-file', '-t', head])).stdout != 'commit\n') {
+          '${(await _git(() => _backend.objectInfo(head))).type}\n' !=
+              'commit\n') {
         throw const GitSyncException('invalid_ref', '远端main必须指向commit');
       }
       if (checkpoint.head != null && !await _ancestor(checkpoint.head!, head)) {
@@ -1316,14 +1110,13 @@ class GitSync {
       }
       return head;
     } finally {
-      await _run(['update-ref', '-d', incoming]);
+      await _git(() => _backend.deleteRef(incoming));
     }
   }
 
   Future<List<CommunityManifest>> _manifestArchive(
       String head, String fingerprint) async {
-    final listing = (await _run(['ls-tree', '-r', '-z', '--full-tree', head]))
-        .stdout as String;
+    final listing = await _treeListing(head, recursive: true);
     final revisions = <int, String>{};
     var hasPointer = false;
     for (final entry in listing.split('\u0000')) {
@@ -1374,12 +1167,11 @@ class GitSync {
   Future<CommunityManifest> _readManifestBlob(String head, String path) async {
     final spec = '$head:$path';
     final size = int.tryParse(
-        ((await _run(['cat-file', '-s', spec])).stdout as String).trim());
+        (await _git(() => _backend.objectInfo(spec))).size.toString());
     if (size == null || size < 1 || size > 4 * 1024 * 1024) {
       throw const GitSyncException('archive_limit', '社区manifest超过4MiB上限');
     }
-    final text = (await _run(['show', '--no-ext-diff', '--no-textconv', spec]))
-        .stdout as String;
+    final text = utf8.decode(await _git(() => _backend.readBlob(spec)));
     if (!text.endsWith('\n'))
       throw const GitSyncException('invalid_manifest', 'manifest必须以LF结尾');
     final json = jsonObject(text.substring(0, text.length - 1));
@@ -1405,58 +1197,27 @@ class GitSync {
 
   Future<String> _commitManifests(
       List<CommunityManifest> history, String? parent) async {
-    final temp =
-        await Directory(_metadata.path).createTemp('community-transaction-');
-    final indexEnvironment = {'GIT_INDEX_FILE': p.join(temp.path, 'index')};
-    try {
-      await _run(['read-tree', '--empty'], environment: indexEnvironment);
-      for (var i = 0; i <= history.length; i++) {
-        final manifest = i == history.length ? history.last : history[i];
-        final path = i == history.length
-            ? 'manifest.json'
-            : 'manifests/${manifest.revision.toString().padLeft(8, '0')}.json';
-        final contents = '${canonicalJson(manifest.toJson())}\n';
-        if (utf8.encode(contents).length > 4 * 1024 * 1024) {
-          throw const GitSyncException('archive_limit', '社区manifest超过4MiB上限');
-        }
-        final file = File(p.join(temp.path, 'blob'));
-        await file.writeAsString(contents, flush: true);
-        final blob = ((await _run(
-                    ['hash-object', '-w', '--no-filters', '--', file.path]))
-                .stdout as String)
-            .trim();
-        if (!_oid.hasMatch(blob))
-          throw const GitSyncException('invalid_object', 'Git blob编号无效');
-        await _run(
-            ['update-index', '--add', '--cacheinfo', '100644,$blob,$path'],
-            environment: indexEnvironment);
-      }
-      final tree = ((await _run(['write-tree'], environment: indexEnvironment))
-              .stdout as String)
-          .trim();
-      if (!_oid.hasMatch(tree))
-        throw const GitSyncException('invalid_object', 'Git tree编号无效');
-      final commit = ((await _run([
-        'commit-tree',
-        tree,
-        if (parent != null) ...['-p', parent],
-        '-m',
-        'zaizuo: signed community revision ${history.length}',
-      ], environment: {
-        'GIT_AUTHOR_NAME': 'zaizuo',
-        'GIT_AUTHOR_EMAIL': 'community@zaizuo.invalid',
-        'GIT_COMMITTER_NAME': 'zaizuo',
-        'GIT_COMMITTER_EMAIL': 'community@zaizuo.invalid',
-      }))
-              .stdout as String)
-          .trim();
-      if (!_oid.hasMatch(commit))
-        throw const GitSyncException('invalid_object', 'Git commit编号无效');
-      return commit;
-    } finally {
-      if (p.dirname(temp.path) == _metadata.path)
-        await temp.delete(recursive: true);
+    final blobs = <String, String>{};
+    for (var i = 0; i <= history.length; i++) {
+      final manifest = i == history.length ? history.last : history[i];
+      final path = i == history.length
+          ? 'manifest.json'
+          : 'manifests/${manifest.revision.toString().padLeft(8, '0')}.json';
+      final bytes = Uint8List.fromList(
+          utf8.encode('${canonicalJson(manifest.toJson())}\n'));
+      if (bytes.length > 4 * 1024 * 1024)
+        throw const GitSyncException('archive_limit', '社区manifest超过4MiB上限');
+      blobs[path] = await _checkedOid(() => _backend.createBlob(bytes));
     }
+    final tree = await _checkedOid(() => _backend.createTree(blobs));
+    return _checkedOid(() => _backend.createCommit(
+        tree: tree,
+        parents: [if (parent != null) parent],
+        message: 'zaizuo: signed community revision ${history.length}',
+        authorName: 'zaizuo',
+        authorEmail: 'community@zaizuo.invalid',
+        committerName: 'zaizuo',
+        committerEmail: 'community@zaizuo.invalid'));
   }
 
   Future<void> _assertLocalRemoteSafe() async {

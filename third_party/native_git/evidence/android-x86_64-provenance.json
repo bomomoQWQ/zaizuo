@@ -1,0 +1,29 @@
+{
+  "abi": "x86_64",
+  "files": {
+    "libcrypto.so": {
+      "sha256": "c6c993b821b9305508feaf0ab4f009f7f62e0790dea3d3a05c8b9fceb698fd37",
+      "size": 4345304
+    },
+    "libgit2.so": {
+      "sha256": "d3eae68303873be6a2f25d923088d8c81cb2fdf20445ca4973447c8b0d08a455",
+      "size": 1696120
+    },
+    "libssh2.so": {
+      "sha256": "1d9a84ebd93dd02736d36f5554e1b615b66054acd73b7dbd282a420e7b767258",
+      "size": 273736
+    },
+    "libssl.so": {
+      "sha256": "cebf380e49668b8eeec3252a445b0188e0540011979cf4cd378413a472834c7d",
+      "size": 680360
+    }
+  },
+  "libgit2": "1.9.7",
+  "libssh2": "1.11.1",
+  "openssl": "3.0.15",
+  "platform": "android",
+  "provenance": "source-build",
+  "schema": "native-v2",
+  "source_ref": "refs/tags/openssl-3.0.15",
+  "toolchain": "4bbc63b82749a4350c16e9dfc0a27999b166c211b1b121ba4c2c909cea8f8fd0"
+}

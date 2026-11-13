@@ -11,6 +11,7 @@ import 'package:zaizuo_core/src/crypto.dart';
 import 'package:zaizuo_core/src/devices.dart';
 import 'package:zaizuo_core/src/events.dart';
 import 'package:zaizuo_core/src/git_sync.dart';
+import 'package:zaizuo_core/src/git_cli_backend.dart';
 import 'package:zaizuo_core/src/store.dart';
 
 const _community = 'git-sync-integration-community';
@@ -84,6 +85,49 @@ void main() {
         isFalse,
         reason: 'remote trees are never checked out');
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('injected typed CLI backend interoperates and reopens with default CLI',
+      () async {
+    await fixture.a.append(
+        device: fixture.deviceA,
+        key: fixture.key,
+        body: {'message': 'typed backend'});
+    final path = Directory(p.join(fixture.root.path, 'injected'));
+    final injected = await GitSync.initializeWithBackend(
+        backend: GitCliBackend(),
+        worktree: path,
+        remoteUrl: fixture.remote.path,
+        deviceId: fixture.idA,
+        segmentSize: 2);
+    fixture.syncs.add(injected);
+    expect(await injected.push(fixture.a), 1);
+    expect(await fixture.syncB.pull(fixture.b), 1);
+    await injected.close();
+    final reopened = await GitSync.initialize(
+        worktree: path,
+        remoteUrl: fixture.remote.path,
+        deviceId: fixture.idA,
+        segmentSize: 2);
+    fixture.syncs.add(reopened);
+    expect(await reopened.push(fixture.a), 0);
+    expect(await reopened.pull(fixture.a), 0);
+  });
+
+  test('injected backend cannot open before repository identity validation',
+      () async {
+    final backend = _ObservedCliBackend();
+    await expectLater(
+        GitSync.initializeWithBackend(
+            backend: backend,
+            worktree: fixture.syncA.worktree,
+            remoteUrl: fixture.remote.path,
+            deviceId: fixture.idB,
+            segmentSize: 2),
+        throwsA(isA<GitSyncException>()
+            .having((e) => e.code, 'code', 'repository_identity')));
+    expect(backend.openCalls, 0);
+    expect(backend.closeCalls, 1);
+  });
 
   test('bad signature is rejected before import and pin advance', () async {
     final event = await fixture.a.append(
@@ -538,6 +582,26 @@ Future<void> main(List<String> args) async {
         throwsA(isA<GitSyncException>()
             .having((e) => e.code, 'code', 'unmanaged_repository')));
   });
+}
+
+class _ObservedCliBackend extends GitCliBackend {
+  int openCalls = 0;
+  int closeCalls = 0;
+  @override
+  Future<void> open(
+      {required String worktreePath,
+      required String remoteUrl,
+      required bool create}) async {
+    openCalls++;
+    await super
+        .open(worktreePath: worktreePath, remoteUrl: remoteUrl, create: create);
+  }
+
+  @override
+  Future<void> close() async {
+    closeCalls++;
+    await super.close();
+  }
 }
 
 class _Fixture {

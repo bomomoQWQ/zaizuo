@@ -4,6 +4,7 @@
 build/
 dist/
 coverage/
+flutter_*.log
 *.exe
 *.test
 .env

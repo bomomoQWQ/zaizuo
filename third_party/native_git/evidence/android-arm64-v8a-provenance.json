@@ -1,0 +1,29 @@
+{
+  "abi": "arm64-v8a",
+  "files": {
+    "libcrypto.so": {
+      "sha256": "f9a7cb8261142f2b29afe1d84afb44b5cdf6daea3a260333a1ddbda45bc1a4bc",
+      "size": 4142864
+    },
+    "libgit2.so": {
+      "sha256": "33426a81d3427b25511f20b4587ece4f2e5c564d1a106fc47b4f17b508b83fc9",
+      "size": 1642496
+    },
+    "libssh2.so": {
+      "sha256": "9b43fa9655c5938facf949ebecd073770eeafa6d1013a49db2b16b9680510d37",
+      "size": 263304
+    },
+    "libssl.so": {
+      "sha256": "279de7d07a16f64d7999599e031a2861365afd1b165cc01c9d23f851fda72194",
+      "size": 670320
+    }
+  },
+  "libgit2": "1.9.7",
+  "libssh2": "1.11.1",
+  "openssl": "3.0.15",
+  "platform": "android",
+  "provenance": "source-build",
+  "schema": "native-v2",
+  "source_ref": "refs/tags/openssl-3.0.15",
+  "toolchain": "4bbc63b82749a4350c16e9dfc0a27999b166c211b1b121ba4c2c909cea8f8fd0"
+}

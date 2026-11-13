@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'probe_service.dart';
+import 'git_probe_panel.dart';
 import 'project_licenses.dart';
 
 void main() {
@@ -138,7 +139,7 @@ class _MobileProbeState extends State<MobileProbe> {
                 ),
                 const SizedBox(height: 10),
                 const Text(
-                  '非正式 UI / 非完整 IM / 无实际 Git 或跨机通信\n仅测试资料；不要导入真实账户或敏感照片。',
+                  '非正式 UI / 非完整 IM / 前台手动 Git 开发验证\n仅测试资料；不要导入真实账户或敏感照片。',
                 ),
                 const SizedBox(height: 12),
                 const ProjectLicensePanel(),
@@ -188,6 +189,10 @@ class _MobileProbeState extends State<MobileProbe> {
                   ),
                 ),
                 const SizedBox(height: 12),
+                if (service != null)
+                  GitProbePanel(
+                    root: Directory('${service!.root.path}/git-probe'),
+                  ),
                 Text(status),
                 if (result != null) ...[
                   const SizedBox(height: 12),
@@ -206,7 +211,7 @@ class _MobileProbeState extends State<MobileProbe> {
                 ],
                 const SizedBox(height: 18),
                 const Text(
-                  '卸载此测试包会删除本机测试资料。未接 Android Keystore、后台同步、通知、Git、相机、外部平台。\n无公网服务、无真实令牌、不向网络上传选择的文件。',
+                  '卸载此测试包会删除本机测试资料与 Git 凭据。PAT 接 AndroidKeyStore，但测试 profile 口令/因素仍同目录。\nGit 仅显式前台操作；无后台同步、通知、相机或外部平台。原图片往返不联网；Git 附件测试单独明确触发上传。',
                   style: TextStyle(fontSize: 12),
                 ),
               ],

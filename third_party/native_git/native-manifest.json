@@ -1,0 +1,299 @@
+﻿{
+    "schema":  1,
+    "package":  "git2dart_binaries",
+    "version":  "1.14.1",
+    "audit_date":  "2026-11-13",
+    "scope":  "cached package Android four ABIs and Windows x64, not a final APK inventory",
+    "files":  [
+                  {
+                      "path":  "android/src/main/jniLibs/armeabi-v7a/libcrypto.so",
+                      "bytes":  3208596,
+                      "sha256":  "055b37ddd1051e352e6f34487be77b5976711ac9fb6c0f6aeae67be644f578fc",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+                                             "OpenSSL 3.0.15 3 Sep 2024"
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/armeabi-v7a/libgit2.so",
+                      "bytes":  1172580,
+                      "sha256":  "91637c67ae3c53ac04d1ebdde3078e15631b65535b17b40a536edef05c4c630d",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/armeabi-v7a/libssh2.so",
+                      "bytes":  181932,
+                      "sha256":  "f23a5594de8161a55771dfe0b27282d85792ea80f65bc6fe111619bec37d5f64",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/armeabi-v7a/libssl.so",
+                      "bytes":  556652,
+                      "sha256":  "e3e396bac87c5f04e33b8954bf2ea5af0b63de2b177ce2e09cce66cbe25ab31c",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/arm64-v8a/libcrypto.so",
+                      "bytes":  4142864,
+                      "sha256":  "f9a7cb8261142f2b29afe1d84afb44b5cdf6daea3a260333a1ddbda45bc1a4bc",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+                                             "OpenSSL 3.0.15 3 Sep 2024"
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/arm64-v8a/libgit2.so",
+                      "bytes":  1642496,
+                      "sha256":  "33426a81d3427b25511f20b4587ece4f2e5c564d1a106fc47b4f17b508b83fc9",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/arm64-v8a/libssh2.so",
+                      "bytes":  263304,
+                      "sha256":  "9b43fa9655c5938facf949ebecd073770eeafa6d1013a49db2b16b9680510d37",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/arm64-v8a/libssl.so",
+                      "bytes":  670320,
+                      "sha256":  "279de7d07a16f64d7999599e031a2861365afd1b165cc01c9d23f851fda72194",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/x86/libcrypto.so",
+                      "bytes":  3894760,
+                      "sha256":  "930aa7dc1eb3312e95e32e3e01a7eef25b60ac616fc721e966d0cf00965180ba",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+                                             "OpenSSL 3.0.15 3 Sep 2024"
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/x86/libgit2.so",
+                      "bytes":  1662016,
+                      "sha256":  "aa6021fd14bc714191b6e91bba5ef73a315e8dbb58b26a9e99277b1f2c0203b1",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/x86/libssh2.so",
+                      "bytes":  259332,
+                      "sha256":  "fb5e6c842d351994007ca87837386c2184b17b219afb453781d02ed949f4a983",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/x86/libssl.so",
+                      "bytes":  632880,
+                      "sha256":  "e708d1475f7ec3264f3bc36edda138e0d63f932385a74a87f94a087900b71097",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/x86_64/libcrypto.so",
+                      "bytes":  4345304,
+                      "sha256":  "c6c993b821b9305508feaf0ab4f009f7f62e0790dea3d3a05c8b9fceb698fd37",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+                                             "OpenSSL 3.0.15 3 Sep 2024"
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/x86_64/libgit2.so",
+                      "bytes":  1696120,
+                      "sha256":  "d3eae68303873be6a2f25d923088d8c81cb2fdf20445ca4973447c8b0d08a455",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/x86_64/libssh2.so",
+                      "bytes":  273736,
+                      "sha256":  "1d9a84ebd93dd02736d36f5554e1b615b66054acd73b7dbd282a420e7b767258",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "android/src/main/jniLibs/x86_64/libssl.so",
+                      "bytes":  680360,
+                      "sha256":  "cebf380e49668b8eeec3252a445b0188e0540011979cf4cd378413a472834c7d",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "windows/libcrypto-3-x64.dll",
+                      "bytes":  5220352,
+                      "sha256":  "6be4ff1f077e69d4926d1f1132c9a9d02f8c3cf99ff607f90829b9f9de321ffa",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+                                             "OpenSSL 3.0.15 3 Sep 2024"
+                                         ]
+                  },
+                  {
+                      "path":  "windows/libgit2.dll",
+                      "bytes":  2160640,
+                      "sha256":  "7cbf3633b7e813fd3dd308b1c1092e2641f2c53281346f09d85ff3865d626d58",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "windows/libssh2.dll",
+                      "bytes":  262656,
+                      "sha256":  "86a7b71eec9de39a2daa2fc96167a54c214a3e4489f998f7b7b0f2dbfa928e9b",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "windows/libssl-3-x64.dll",
+                      "bytes":  783872,
+                      "sha256":  "3250374d53dd8129a95ad462793b0b2efeca7f139e0d7325906d1251d67898c4",
+                      "matches_packaged_provenance":  true,
+                      "packaged_versions":  {
+                                                "libgit2":  "1.9.7",
+                                                "openssl":  "3.0.15",
+                                                "libssh2":  "1.11.1"
+                                            },
+                      "binary_strings":  [
+
+                                         ]
+                  },
+                  {
+                      "path":  "assets/certs/cacert.pem",
+                      "bytes":  230814,
+                      "sha256":  "8ac40bdd3d3e151a6b4078d2b2029796e8f843e3f86fbf2adbc4dd9f05e79def"
+                  },
+                  {
+                      "path":  "android/src/main/assets/certs/cacert.pem",
+                      "bytes":  230814,
+                      "sha256":  "8ac40bdd3d3e151a6b4078d2b2029796e8f843e3f86fbf2adbc4dd9f05e79def"
+                  }
+              ]
+}

@@ -1,0 +1,29 @@
+{
+  "abi": "X64",
+  "files": {
+    "libcrypto-3-x64.dll": {
+      "sha256": "6be4ff1f077e69d4926d1f1132c9a9d02f8c3cf99ff607f90829b9f9de321ffa",
+      "size": 5220352
+    },
+    "libgit2.dll": {
+      "sha256": "7cbf3633b7e813fd3dd308b1c1092e2641f2c53281346f09d85ff3865d626d58",
+      "size": 2160640
+    },
+    "libssh2.dll": {
+      "sha256": "86a7b71eec9de39a2daa2fc96167a54c214a3e4489f998f7b7b0f2dbfa928e9b",
+      "size": 262656
+    },
+    "libssl-3-x64.dll": {
+      "sha256": "3250374d53dd8129a95ad462793b0b2efeca7f139e0d7325906d1251d67898c4",
+      "size": 783872
+    }
+  },
+  "libgit2": "1.9.7",
+  "libssh2": "1.11.1",
+  "openssl": "3.0.15",
+  "platform": "windows",
+  "provenance": "source-build",
+  "schema": "native-v2",
+  "source_ref": "refs/tags/openssl-3.0.15",
+  "toolchain": "0d9f6f726219a237a61691203a8407553259ca4a202f88e8a995acd45caec5d6"
+}

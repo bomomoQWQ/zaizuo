@@ -4,8 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
-const projectSourceUrl =
-    'https://github.com/bomomoQWQ/zaizuo/tree/v0.1.0-media-test3';
+const projectSourceUrl = 'https://github.com/bomomoQWQ/zaizuo/tree/main';
 const projectLicenseAsset = 'assets/licenses/AGPL-3.0-only.txt';
 const projectNoticeAsset = 'assets/licenses/NOTICE.txt';
 
@@ -134,6 +133,31 @@ class _ProjectLicensePanelState extends State<ProjectLicensePanel> {
               ? null
               : () => unawaited(showDocument('第三方许可', thirdPartyNotices)),
         ),
+        control(
+          '查看嵌入式 Git 原生依赖许可与来源',
+          loading
+              ? null
+              : () => unawaited(
+                  showDocument('原生 Git 依赖', () async {
+                    final sections = <String>[];
+                    for (final file in [
+                      'SOURCES.md',
+                      'licenses/git2dart-MIT.txt',
+                      'licenses/git2dart_binaries-MIT.txt',
+                      'licenses/libgit2-COPYING.txt',
+                      'licenses/libssh2-COPYING.txt',
+                      'licenses/OpenSSL-LICENSE.txt',
+                      'licenses/MPL-2.0.txt',
+                    ]) {
+                      sections.add(
+                        '$file\n${await rootBundle.loadString('assets/licenses/native_git/$file')}',
+                      );
+                    }
+                    return sections.join('\n\n');
+                  }),
+                ),
+        ),
+        const Text('此开发构建尚未发布对应源码版本；main 地址不是固定发布证明。分发时需配套本地源码快照与原生依赖来源材料。'),
         if (documentTitle != null) ...[
           const SizedBox(height: 8),
           Text(

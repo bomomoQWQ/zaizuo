@@ -1,0 +1,22 @@
+name: zaizuo_git_mobile
+description: 在座嵌入式libgit2移动Git传输，不依赖系统命令行Git。
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: '>=3.14.0 <4.0.0'
+  flutter: '>=3.50.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  zaizuo_core:
+    path: ../core
+  git2dart: 0.5.6
+  git2dart_binaries: 1.14.1
+  ffi: ^2.2.0
+  path: ^1.9.1
+dev_dependencies:
+  zaizuo_runtime:
+    path: ../runtime
+  flutter_test:
+    sdk: flutter
+  lints: ^5.1.1

@@ -1,0 +1,148 @@
+﻿=== armeabi-v7a/libgit2.so ===
+  0x00000001 (NEEDED)       Shared library: [libssl.so]
+  0x00000001 (NEEDED)       Shared library: [libcrypto.so]
+  0x00000001 (NEEDED)       Shared library: [libssh2.so]
+  0x00000001 (NEEDED)       Shared library: [libz.so]
+  0x00000001 (NEEDED)       Shared library: [libm.so]
+  0x00000001 (NEEDED)       Shared library: [libdl.so]
+  0x00000001 (NEEDED)       Shared library: [libc.so]
+  0x0000000e (SONAME)       Library soname: [libgit2-experimental.so]
+libgit2 1.9.7
+=== armeabi-v7a/libssh2.so ===
+  0x00000001 (NEEDED)       Shared library: [libcrypto.so]
+  0x00000001 (NEEDED)       Shared library: [libz.so]
+  0x00000001 (NEEDED)       Shared library: [libm.so]
+  0x00000001 (NEEDED)       Shared library: [libdl.so]
+  0x00000001 (NEEDED)       Shared library: [libc.so]
+  0x0000000e (SONAME)       Library soname: [libssh2.so]
+SSH-2.0-libssh2_1.11.1_DEV
+=== armeabi-v7a/libssl.so ===
+  0x00000001 (NEEDED)       Shared library: [libcrypto.so]
+  0x00000001 (NEEDED)       Shared library: [libdl.so]
+  0x00000001 (NEEDED)       Shared library: [libc.so]
+  0x0000000e (SONAME)       Library soname: [libssl.so]
+=== armeabi-v7a/libcrypto.so ===
+  0x00000001 (NEEDED)       Shared library: [libdl.so]
+  0x00000001 (NEEDED)       Shared library: [libc.so]
+  0x0000000e (SONAME)       Library soname: [libcrypto.so]
+OpenSSL 3.0.15 3 Sep 2024
+DES-EDE-ECB:DES-EDE:1.3.14.3.2.17
+X448:1.3.101.111
+AES-256-XTS:1.3.111.2.1619.0.1.2
+SHA1:SHA-1:SSL3-SHA1:1.3.14.3.2.26
+AES-128-XTS:1.3.111.2.1619.0.1.1
+ED448:1.3.101.113
+DH:dhKeyAgreement:1.2.840.113549.1.3.1
+ED25519:1.3.101.112
+X25519:1.3.101.110
+=== arm64-v8a/libgit2.so ===
+  0x0000000000000001 (NEEDED)       Shared library: [libssl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libcrypto.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libssh2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libz.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libgit2-experimental.so]
+libgit2 1.9.7
+=== arm64-v8a/libssh2.so ===
+  0x0000000000000001 (NEEDED)       Shared library: [libcrypto.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libz.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libssh2.so]
+SSH-2.0-libssh2_1.11.1_DEV
+=== arm64-v8a/libssl.so ===
+  0x0000000000000001 (NEEDED)       Shared library: [libcrypto.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libssl.so]
+=== arm64-v8a/libcrypto.so ===
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libcrypto.so]
+OpenSSL 3.0.15 3 Sep 2024
+DES-EDE-ECB:DES-EDE:1.3.14.3.2.17
+X448:1.3.101.111
+AES-256-XTS:1.3.111.2.1619.0.1.2
+SHA1:SHA-1:SSL3-SHA1:1.3.14.3.2.26
+AES-128-XTS:1.3.111.2.1619.0.1.1
+ED448:1.3.101.113
+DH:dhKeyAgreement:1.2.840.113549.1.3.1
+ED25519:1.3.101.112
+X25519:1.3.101.110
+=== x86/libgit2.so ===
+  0x00000001 (NEEDED)       Shared library: [libssl.so]
+  0x00000001 (NEEDED)       Shared library: [libcrypto.so]
+  0x00000001 (NEEDED)       Shared library: [libssh2.so]
+  0x00000001 (NEEDED)       Shared library: [libz.so]
+  0x00000001 (NEEDED)       Shared library: [libm.so]
+  0x00000001 (NEEDED)       Shared library: [libdl.so]
+  0x00000001 (NEEDED)       Shared library: [libc.so]
+  0x0000000e (SONAME)       Library soname: [libgit2-experimental.so]
+libgit2 1.9.7
+=== x86/libssh2.so ===
+  0x00000001 (NEEDED)       Shared library: [libcrypto.so]
+  0x00000001 (NEEDED)       Shared library: [libz.so]
+  0x00000001 (NEEDED)       Shared library: [libm.so]
+  0x00000001 (NEEDED)       Shared library: [libdl.so]
+  0x00000001 (NEEDED)       Shared library: [libc.so]
+  0x0000000e (SONAME)       Library soname: [libssh2.so]
+SSH-2.0-libssh2_1.11.1_DEV
+=== x86/libssl.so ===
+  0x00000001 (NEEDED)       Shared library: [libcrypto.so]
+  0x00000001 (NEEDED)       Shared library: [libdl.so]
+  0x00000001 (NEEDED)       Shared library: [libc.so]
+  0x0000000e (SONAME)       Library soname: [libssl.so]
+=== x86/libcrypto.so ===
+  0x00000001 (NEEDED)       Shared library: [libdl.so]
+  0x00000001 (NEEDED)       Shared library: [libc.so]
+  0x0000000e (SONAME)       Library soname: [libcrypto.so]
+OpenSSL 3.0.15 3 Sep 2024
+DES-EDE-ECB:DES-EDE:1.3.14.3.2.17
+X448:1.3.101.111
+AES-256-XTS:1.3.111.2.1619.0.1.2
+SHA1:SHA-1:SSL3-SHA1:1.3.14.3.2.26
+AES-128-XTS:1.3.111.2.1619.0.1.1
+ED448:1.3.101.113
+DH:dhKeyAgreement:1.2.840.113549.1.3.1
+ED25519:1.3.101.112
+X25519:1.3.101.110
+=== x86_64/libgit2.so ===
+  0x0000000000000001 (NEEDED)       Shared library: [libssl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libcrypto.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libssh2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libz.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libgit2-experimental.so]
+libgit2 1.9.7
+=== x86_64/libssh2.so ===
+  0x0000000000000001 (NEEDED)       Shared library: [libcrypto.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libz.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libssh2.so]
+SSH-2.0-libssh2_1.11.1_DEV
+=== x86_64/libssl.so ===
+  0x0000000000000001 (NEEDED)       Shared library: [libcrypto.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libssl.so]
+=== x86_64/libcrypto.so ===
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libcrypto.so]
+OpenSSL 3.0.15 3 Sep 2024
+DES-EDE-ECB:DES-EDE:1.3.14.3.2.17
+X448:1.3.101.111
+AES-256-XTS:1.3.111.2.1619.0.1.2
+SHA1:SHA-1:SSL3-SHA1:1.3.14.3.2.26
+AES-128-XTS:1.3.111.2.1619.0.1.1
+ED448:1.3.101.113
+DH:dhKeyAgreement:1.2.840.113549.1.3.1
+ED25519:1.3.101.112
+X25519:1.3.101.110

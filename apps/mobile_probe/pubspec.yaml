@@ -1,6 +1,6 @@
 name: zaizuo_mobile_probe
 description: 在座 Android 安装与本机图片加密往返验证壳，非正式 IM。
-version: 0.1.0+2
+version: 0.1.0+3
 publish_to: none
 
 environment:
@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  zaizuo_git_mobile:
+    path: ../../packages/git_mobile
   zaizuo_core:
     path: ../../packages/core
   zaizuo_runtime:
@@ -23,3 +25,6 @@ flutter:
     - assets/probe.png
     - assets/licenses/AGPL-3.0-only.txt
     - assets/licenses/NOTICE.txt
+    - assets/licenses/native_git/SOURCES.md
+    - assets/licenses/native_git/native-manifest.json
+    - assets/licenses/native_git/licenses/

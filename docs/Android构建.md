@@ -1,5 +1,20 @@
 # Android 安装验证壳：构建与验收边界
 
+## Android Git 开发轮更新（2026-11-13，未发布）
+
+以下 test3/初始构建记录是历史证据，不再代表当前工作区功能。当前 `0.1.0+3` 新增内嵌 libgit2 的 HTTPS Git、前台手动 Node 同步、公开名册/加入请求导出及根接纳、测试消息/图片与 Keystore 包裹 PAT。见 [应用操作说明](../apps/mobile_probe/README.md) 和 [嵌入后端说明](../packages/git_mobile/README.md)。
+
+- core 抽取 typed backend，原 CLI 协议/签名/pins 检查共用；原测试101通过+1既有权限相关跳过，新增2项注入测试通过。原生后端3项对象/CAS测试和5项真实 CLI↔native 测试通过，涵盖双向文件/RGBA、懒取、重开、确定性附件 OID、回退/删除/签名有效的旧事件改写及非法附件拒绝。不是 Android 真机测试。
+- Flutter 应用10项测试与静态分析通过；新 Java Keystore 代码已通过 Android APK 编译。ADB 枚举无设备，未进行手机安装、启动、Keystore/HTTPS 或双机验收。
+- 最终 arm64 debug 构建已实际成功，原生完整 notices 已嵌入并逐字节核对，APK v2 验签通过。实物只含 arm64-v8a（含 Flutter/libgit2/SSL/JNI），版本0.1.0+3，大小102,723,947 bytes，SHA256 `7d24f5e33a6c41725830151af56e96407048d5767aed5f94547f7acd519e84b3`；本地文件为 `dist/packages/zaizuo-mobile-probe-0.1.0-android-git-dev1-arm64-debug.apk`，未发布。Ubuntu 同锁包 libgit2 1.9.7/OpenSSL 的真实 TLS smart-Git 6项通过（认证推拉、凭据拒绝、错主机、重定向、非FF、独立新进程未知CA拒绝），不等于Android真机验收。发现并修复全局CA累积：worker只首次加载固定CA字节，跨仓库不同CA拒绝，首次初始化失败隔离；trust snapshot保留worker生命周期。当前不发布 Release：原生依赖来源还存在 [已记录的对应源码/构建 recipe 缺口](../third_party/native_git/SOURCES.md)。移动 main URL 不是固定发布源码证明，分发打包脚本会因此拒绝，不能覆盖旧 test3。
+- 新增 INTERNET；禁止备份和明文流量不变。只有用户显式前台操作才联网，不启动公网监听/后台常驻。PAT 存储与账号独立第二因素是不同问题；测试口令/因素同目录边界不变。
+- 锁定 git2dart0.5.6 / binaries1.14.1，实测 libgit2 1.9.7；Windows 预编 HTTPS 为 WinHTTP，不支持捆绑 CA，此原生后端明确 `unsupported_tls_backend`，不绕过证书。现有桌面 CLI HTTPS 不受影响。Android/Linux 路径要求 OpenSSL + 指定 CA；捆绑根不是 Android 系统 trust store。
+- JNI 传递依赖实际要求额外 Android35 platform，FFI 插件要求 CMake3.22.1。已用官方 sdkmanager Java 入口安装到隔离 F 盘 SDK，已有许可满足、没有接受新许可；共享 C 盘 SDK不变。原 sdkmanager BAT 被平铺到 latest 根但其 APP_HOME 假设 bin 子目录，直接运行会 ClassNotFound，改用同一官方 jar/主类不是修改 SDK 逻辑。应用 compile36/min24/target34 不变。
+- 新依赖默认把多个 ABI 的 SO 打进单架构包，已添加与 `target-platform` 一致的 ABI filter；最终 ZIP 需核对每个 ABI 具有 Flutter engine，不能把只有依赖 SO 的目录当可运行多架构包。
+- 当前仍有限制：HTTPS-only/PAT、无 SSH/匿名 UI、native worker 常驻、fetch pack 无总体字节/对象/时间预算，Dart PAT 字符串无法可靠清零。不能声称完整恶意服务器 DoS 防护或全部跨平台安装验收完成。
+
+## 以下为 test3 及更早历史记录
+
 ## 这是什么，不是什么
 
 [mobile_probe](../apps/mobile_probe/README.md) 是最小 Flutter Native **debug/internal 安装验证壳**：显示 Android/Dart 环境，初始化应用私密测试资料，选择系统文件或运行内置 PNG，调用真实 `PreferredImageEncoder` 输出 WebP，再用真实 `EncryptedAttachments` 密文落盘与解密校验、预览。

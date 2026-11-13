@@ -1,0 +1,29 @@
+{
+  "abi": "armeabi-v7a",
+  "files": {
+    "libcrypto.so": {
+      "sha256": "055b37ddd1051e352e6f34487be77b5976711ac9fb6c0f6aeae67be644f578fc",
+      "size": 3208596
+    },
+    "libgit2.so": {
+      "sha256": "91637c67ae3c53ac04d1ebdde3078e15631b65535b17b40a536edef05c4c630d",
+      "size": 1172580
+    },
+    "libssh2.so": {
+      "sha256": "f23a5594de8161a55771dfe0b27282d85792ea80f65bc6fe111619bec37d5f64",
+      "size": 181932
+    },
+    "libssl.so": {
+      "sha256": "e3e396bac87c5f04e33b8954bf2ea5af0b63de2b177ce2e09cce66cbe25ab31c",
+      "size": 556652
+    }
+  },
+  "libgit2": "1.9.7",
+  "libssh2": "1.11.1",
+  "openssl": "3.0.15",
+  "platform": "android",
+  "provenance": "source-build",
+  "schema": "native-v2",
+  "source_ref": "refs/tags/openssl-3.0.15",
+  "toolchain": "4bbc63b82749a4350c16e9dfc0a27999b166c211b1b121ba4c2c909cea8f8fd0"
+}
