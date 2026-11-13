@@ -1,14 +1,22 @@
 # 在座 CLI 便携测试包
 
-这是「在座」非界面原型，不是聊天图形界面、Flutter安装包或Android APK，不是QQ/微信客户端，也不包含NapCat代码。项目许可证待用户决定，当前仅用于用户授权的本地/内部验收；不要自行公开发布或推送。
+这是「在座」非界面原型，不是聊天图形界面、Flutter安装包或Android APK，不是QQ/微信客户端，也不包含NapCat代码。项目原创代码采用 **AGPL-3.0-only**，完整条款见包根 `LICENSE`，版权、无担保及第三方边界见 `NOTICE`；Dart运行时与第三方依赖保留各自许可，不被项目许可替换。本包是测试原型，不因公开源码或许可确定而成为生产安全承诺。
 
 ## 包内容和平台
 
 - Windows `snapshot` 包：`zaizuo.cmd` + `bin/dartaotruntime.exe` + `bin/zaizuo.aot`。这是**AOT快照与配套运行时**，不是单文件在座EXE；最终用户无需安装Dart SDK。
 - Windows `exe` 包：仅标准 `dart compile exe` 成功后才生成的原生可执行文件与启动器，不会把失败的snapshot冒充单文件exe。
 - Linux包：`zaizuo` 启动器 + `bin/zaizuo` 原生CLI，按构建机x64/arm64架构，不能跨架构混用。
-- `BUILD.json`（构建类型/版本）、`SHA256SUMS`（包内文件摘要）、`licenses/`（Dart与依赖许可证/锁定清单）、`runtime.env.example`（**不含秘密**的设置说明）。
+- `BUILD.json`（版本、构建/重打包方式、许可与对应源码）、`SOURCE.md`（对应源码标签/免费下载和构建入口）、`LICENSE`、`NOTICE`、`SHA256SUMS`（包内文件摘要）、`licenses/`（项目、Dart与依赖许可证/锁定清单）、`runtime.env.example`（**不含秘密**的设置说明）。
 - 不附Dart完整SDK、Git、cwebp、真实账户/口令/令牌/设备资料、社区仓库或缓存。不安装系统服务，不修改PATH、防火墙或开机启动。
+
+## 许可与对应源码
+
+- 源码仓库：<https://github.com/bomomoQWQ/zaizuo>。
+- `0.1.0-media-test3` 对应源码：<https://github.com/bomomoQWQ/zaizuo/tree/v0.1.0-media-test3>。
+- 同标签免费下载：<https://github.com/bomomoQWQ/zaizuo/archive/refs/tags/v0.1.0-media-test3.tar.gz>；包含项目源码、打包脚本和依赖锁定清单。其他版本以随包 `SOURCE.md` / `BUILD.json` 指定的标签为准。
+- Windows test3是从test2完整载荷制作的**许可/说明重打包**，不是重编译；AOT快照、配套运行时和业务/core代码未变。其 `BUILD.json` 明确记录原包名称、SHA256及 `repackaged` 状态，不能把新版本号理解为新增业务能力或安全修复。
+- 分发本程序时须依AGPL提供相应源码并保留适用声明；若修改后供用户通过网络交互，另见AGPL第13节。发布者应确保包旁源码入口持续可用、无需额外付费；这里的说明不替代完整许可条款。
 
 ## 先验证再运行
 

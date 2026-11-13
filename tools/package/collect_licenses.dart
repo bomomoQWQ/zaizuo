@@ -3,9 +3,9 @@ import 'dart:convert';
 import 'dart:io';
 
 void main(List<String> args) {
-  if (args.length != 3) {
+  if (args.length != 3 && args.length != 4) {
     stderr.writeln(
-      'usage: dart collect_licenses.dart <package_config.json> <pubspec.lock> <output-dir>',
+      'usage: dart collect_licenses.dart <package_config.json> <pubspec.lock> <output-dir> [project-root]',
     );
     exitCode = 64;
     return;
@@ -13,19 +13,67 @@ void main(List<String> args) {
   final configFile = File(args[0]).absolute;
   final config =
       jsonDecode(configFile.readAsStringSync()) as Map<String, dynamic>;
+  // 不从依赖包的祖先搜索根许可；fixture/其他源码副本必须明确传自己的根目录。
+  final projectRoot = args.length == 4
+      ? Directory(args[3]).absolute
+      : Directory.fromUri(Platform.script.resolve('../../'));
+  final projectNotices = [
+    File.fromUri(projectRoot.uri.resolve('LICENSE')),
+    File.fromUri(projectRoot.uri.resolve('NOTICE')),
+  ];
+  final missingProjectNotices = projectNotices
+      .where((file) => !file.existsSync() || file.lengthSync() == 0)
+      .map((file) => file.uri.pathSegments.last)
+      .toList();
+  if (missingProjectNotices.isNotEmpty) {
+    stderr.writeln(
+      '缺少项目根许可/声明：${missingProjectNotices.join(', ')}。停止打包，不使用第三方或祖先目录的许可替代。',
+    );
+    exitCode = 1;
+    return;
+  }
+  final ownedRoot = Directory.fromUri(projectRoot.uri.resolve('packages/'));
+  final ownedPrefix =
+      ownedRoot.resolveSymbolicLinksSync() + Platform.pathSeparator;
+  bool isOwned(String name, Directory root) {
+    if (!name.startsWith('zaizuo_') || !root.existsSync()) return false;
+    final path = root.resolveSymbolicLinksSync();
+    // canonical路径和分隔符边界防止相似前缀、../与符号链接把外部pathdep误当项目代码。
+    return Platform.isWindows
+        ? path.toLowerCase().startsWith(ownedPrefix.toLowerCase())
+        : path.startsWith(ownedPrefix);
+  }
+
   final output = Directory(args[2]).absolute;
   output.createSync(recursive: true);
-  final index = <String>[];
+  final index = <String>['项目原创代码：AGPL-3.0-only；zaizuo/LICENSE, zaizuo/NOTICE。'];
   final missing = <String>[];
+  void copyNotices(String name, List<File> files) {
+    final dest = Directory('${output.path}/$name')..createSync();
+    for (final source in files) {
+      final basename = source.uri.pathSegments.last;
+      File('${dest.path}/$basename')
+          .writeAsBytesSync(source.readAsBytesSync(), flush: true);
+    }
+  }
+
+  copyNotices('zaizuo', projectNotices);
+  final seen = <String>{'zaizuo'}; // 与项目许可目录重名也拒绝，避免覆盖。
   final packages = (config['packages'] as List).cast<Map<String, dynamic>>()
     ..sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
   for (final package in packages) {
     final name = package['name'] as String;
-    if (!RegExp(r'^[a-zA-Z0-9_]+$').hasMatch(name)) {
-      throw const FormatException('unsafe package name');
+    if (!RegExp(r'^[a-zA-Z0-9_]+$').hasMatch(name) ||
+        !seen.add(name.toLowerCase())) {
+      throw const FormatException('unsafe or duplicate package name');
     }
     final packageRoot = configFile.uri.resolve(package['rootUri'] as String);
     final root = Directory.fromUri(packageRoot);
+    if (isOwned(name, root)) {
+      copyNotices(name, projectNotices);
+      index.add('$name: AGPL-3.0-only（项目根 LICENSE, NOTICE 的逐字副本）');
+      continue;
+    }
     final candidates = [
       'LICENSE',
       'LICENSE.md',
@@ -39,19 +87,10 @@ void main(List<String> args) {
         .where((file) => file.existsSync())
         .toList();
     if (files.isEmpty) {
-      if (name.startsWith('zaizuo_')) {
-        index.add('$name: 本项目许可证待用户决定，不擅自附加开源许可。');
-      } else {
-        missing.add(name);
-      }
+      missing.add(name);
       continue;
     }
-    final dest = Directory('${output.path}/$name')..createSync();
-    for (final source in files) {
-      final basename = source.uri.pathSegments.last;
-      File('${dest.path}/$basename')
-          .writeAsBytesSync(source.readAsBytesSync(), flush: true);
-    }
+    copyNotices(name, files);
     index.add('$name: ${files.map((f) => f.uri.pathSegments.last).join(', ')}');
   }
   File('${output.path}/INDEX.txt')

@@ -3,6 +3,7 @@ param(
     [string]$DartExe,
     [string]$OutDir,
     [string]$Version = '0.1.0-dev',
+    [string]$SourceRef,
     [ValidateSet('Snapshot','Exe')][string]$Mode = 'Snapshot',
     [switch]$SkipPubGet,
     [switch]$SkipSmoke
@@ -14,6 +15,15 @@ $DartExe = (Get-Item -LiteralPath $DartExe -ErrorAction Stop).FullName
 if (-not $OutDir) { $OutDir = Join-Path $root 'dist\packages' }
 $OutDir = [IO.Path]::GetFullPath($OutDir)
 if ($Version -notmatch '^[0-9][0-9A-Za-z.+-]*$') { throw 'Version只能含安全ASCII版本字符。' }
+if (-not $SourceRef) { $SourceRef = "v$Version" }
+if ($SourceRef -notmatch '^v[0-9][0-9A-Za-z.+-]*$') { throw 'SourceRef必须是安全ASCII版本标签。' }
+$sourceRepository = 'https://github.com/bomomoQWQ/zaizuo'
+$sourceUrl = "$sourceRepository/tree/$SourceRef"
+$sourceArchive = "$sourceRepository/archive/refs/tags/$SourceRef.tar.gz"
+foreach ($notice in @('LICENSE','NOTICE')) {
+    $source = Join-Path $root $notice
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf) -or (Get-Item -LiteralPath $source).Length -eq 0) { throw "缺少项目根许可/声明：$source" }
+}
 if ($env:OS -ne 'Windows_NT') { throw '请在Windows本机运行；本脚本不伪装交叉编译。' }
 $stamp = [Guid]::NewGuid().ToString('N')
 $name = "zaizuo-cli-$Version-windows-x64-$($Mode.ToLowerInvariant())"
@@ -23,7 +33,9 @@ $work = Join-Path $buildRoot 'work'
 $payload = Join-Path $stage 'bin'
 $null = New-Item -ItemType Directory -Path $stage,$work,$payload,$OutDir -Force
 $archive = Join-Path $OutDir "$name.zip"
-if (Test-Path -LiteralPath $archive) { throw "目标已存在，拒绝覆盖：$archive；使用新版本或明确自行处理旧包。" }
+foreach ($target in @($archive,"$archive.sha256")) {
+    if (Test-Path -LiteralPath $target) { throw "目标已存在，拒绝覆盖：$target；使用新版本或明确自行处理旧包。" }
+}
 $env:PUB_CACHE = Join-Path $root '.local\pub-cache'
 $env:TEMP = Join-Path $root '.local\temp'; $env:TMP = $env:TEMP
 $env:APPDATA = Join-Path $root '.local\dart-user'; $env:LOCALAPPDATA = $env:APPDATA
@@ -65,7 +77,10 @@ try {
 } finally { Pop-Location }
 $licenses = Join-Path $stage 'licenses'
 $null = New-Item -ItemType Directory -Path $licenses
-Invoke-Checked $DartExe @((Join-Path $PSScriptRoot 'collect_licenses.dart'),(Join-Path $runtime '.dart_tool\package_config.json'),(Join-Path $runtime 'pubspec.lock'),$licenses)
+Invoke-Checked $DartExe @((Join-Path $PSScriptRoot 'collect_licenses.dart'),(Join-Path $runtime '.dart_tool\package_config.json'),(Join-Path $runtime 'pubspec.lock'),$licenses,$root)
+foreach ($notice in @('LICENSE','NOTICE')) {
+    Copy-Item -LiteralPath (Join-Path $root $notice) -Destination (Join-Path $stage $notice)
+}
 Copy-Item -LiteralPath (Join-Path $sdk 'LICENSE') -Destination (Join-Path $licenses 'Dart-SDK-LICENSE.txt')
 foreach ($notice in @('THIRD_PARTY_NOTICES','third_party/NOTICES','NOTICES')) {
     $source = Join-Path $sdk $notice
@@ -76,7 +91,21 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'PORTABLE-README.md') -Destinati
 $cmd = if ($Mode -eq 'Snapshot') { '"%~dp0bin\dartaotruntime.exe" "%~dp0bin\zaizuo.aot" %*' } else { '"%~dp0bin\zaizuo.exe" %*' }
 $launcher = "@echo off`r`nsetlocal`r`nif defined ZAIZUO_GIT_BIN_DIR set `"PATH=%ZAIZUO_GIT_BIN_DIR%;%PATH%`"`r`nif defined ZAIZUO_CWEBP_BIN_DIR set `"PATH=%ZAIZUO_CWEBP_BIN_DIR%;%PATH%`"`r`n$cmd`r`nexit /b %errorlevel%`r`n"
 [IO.File]::WriteAllText((Join-Path $stage 'zaizuo.cmd'),$launcher,[Text.Encoding]::ASCII)
-$metadata = [ordered]@{project='zaizuo';version=$Version;platform='windows-x64';mode=$Mode.ToLowerInvariant();dart=$dartVersion;created_utc=[DateTime]::UtcNow.ToString('o');smoke_tested=(-not $SkipSmoke);git_bundled=$false;cwebp_bundled=$false;project_license='undecided-internal-testing-only'}
+$sourceNotice = @"
+# 对应源码 / Corresponding Source
+
+- Project license: AGPL-3.0-only; see LICENSE and NOTICE.
+- Repository: $sourceRepository
+- Source tag: $SourceRef
+- Source URL: $sourceUrl
+- Source download: $sourceArchive
+- Build instructions: $sourceUrl/docs/构建与安装.md
+- Packaging scripts and dependency lockfiles: $sourceUrl/tools/package
+
+This package was compiled from source by build-windows.ps1, not repackaged from an older binary. Before distributing it, verify that the tag contains the actual corresponding source and that the source download remains available at no additional charge. Third-party notices in licenses/ retain their own terms; the project license does not replace them. See AGPL sections 6 and 13 for applicable distribution and modified network-version obligations.
+"@
+[IO.File]::WriteAllText((Join-Path $stage 'SOURCE.md'),$sourceNotice,[Text.UTF8Encoding]::new($false))
+$metadata = [ordered]@{project='zaizuo';version=$Version;platform='windows-x64';mode=$Mode.ToLowerInvariant();dart=$dartVersion;created_utc=[DateTime]::UtcNow.ToString('o');build_method='native-compile';repackaged=$false;powershell_script_executed=$true;smoke_tested=(-not $SkipSmoke);smoke_scope='help-only';git_bundled=$false;cwebp_bundled=$false;project_license='AGPL-3.0-only';source_repository=$sourceRepository;source_ref=$SourceRef;source_url=$sourceUrl;source_archive=$sourceArchive}
 [IO.File]::WriteAllText((Join-Path $stage 'BUILD.json'),($metadata | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
 if (-not $SkipSmoke) {
     Push-Location $stage
