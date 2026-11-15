@@ -34,6 +34,42 @@ void main() {
     await root.delete(recursive: true);
   });
 
+  test('密码校验先于任何资料写入，失败后可直接更正重试', () async {
+    final current = controller('validation');
+    await current.create(
+      name: 'bbtest',
+      displayName: '测试员',
+      password: '123456789012',
+    );
+    expect(current.error, contains('[invalid_password]'));
+    expect(
+      await Directory('${root.path}/validation/profile').exists(),
+      isFalse,
+    );
+    await current.create(
+      name: 'bbtest',
+      displayName: '测试员',
+      password: 'M8!vR2@kL9#sT6%z',
+    );
+    expect(current.error, isNull);
+    expect(current.isOpen, isTrue);
+  });
+
+  test('既有不完整资料明确提示且绝不覆盖', () async {
+    final current = controller('partial');
+    final directory = Directory('${root.path}/partial/profile');
+    await directory.create(recursive: true);
+    final marker = File('${directory.path}/community.json');
+    await marker.writeAsString('preserve-original');
+    await current.create(
+      name: 'bbtest',
+      displayName: '测试员',
+      password: 'M8!vR2@kL9#sT6%z',
+    );
+    expect(current.error, contains('[incomplete_profile]'));
+    expect(await marker.readAsString(), 'preserve-original');
+  });
+
   test('真实资料创建、授权会话、排队发送、锁定及新控制器重开', () async {
     final first = controller('alice');
     var notifications = 0;

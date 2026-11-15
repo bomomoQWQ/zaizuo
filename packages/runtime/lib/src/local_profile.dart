@@ -44,6 +44,10 @@ class LocalProfile {
       String? pinnedFingerprint,
       KdfParameters parameters = const KdfParameters()}) async {
     validateDisplayName(displayName);
+    // Fail before creating directories or writing public bootstrap files. A
+    // rejected password must not strand a non-empty, unusable profile.
+    final normalizedName = normalizeAccountName(name);
+    validatePassword(normalizedName, password);
     if (await root.exists() && !await root.list().isEmpty)
       throw StateError('目标资料目录不是空目录');
     await root.create(recursive: true);

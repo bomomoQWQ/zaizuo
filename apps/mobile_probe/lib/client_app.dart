@@ -270,7 +270,11 @@ class _ClientAppState extends State<ClientApp> {
                     obscureText: true,
                     enableSuggestions: false,
                     autocorrect: false,
-                    decoration: const InputDecoration(labelText: '密码'),
+                    decoration: InputDecoration(
+                      labelText: '密码',
+                      helperText: _create ? '12位以上，含大小写字母，不含账户名或常见弱密码模式' : null,
+                      helperMaxLines: 2,
+                    ),
                   ),
                   if (_create) ...[
                     const SizedBox(height: 12),

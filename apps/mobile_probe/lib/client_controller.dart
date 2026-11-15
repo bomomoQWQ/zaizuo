@@ -118,6 +118,8 @@ class ClientController extends ChangeNotifier {
         ? cause.code
         : cause is GitSyncException
         ? cause.code
+        : cause is FileSystemException
+        ? 'directory_io'
         : 'operation_failed';
     const labels = <String, String>{
       'bad_request': '输入无效',
@@ -134,6 +136,12 @@ class ClientController extends ChangeNotifier {
       'invalid_remote': 'Git 仓库地址无效',
       'unmanaged_repository': '同步目录不是受管空目录',
       'repository_identity': '同步目录身份不匹配',
+      'invalid_account_name': '账户名须为1–14位英文字母、数字或下划线',
+      'invalid_display_name': '显示名称须为1–14个显示字符',
+      'invalid_password': '密码须为12–1024位、含大写和小写字母、不能含账户名或常见弱模式',
+      'profile_exists': '此目录已有账号资料，请切换到解锁，不要重复创建',
+      'incomplete_profile': '上次创建留下了不完整资料，已保留原文件；请选择新的空数据目录再创建',
+      'directory_io': '本地数据写入失败，请检查可用空间与目录访问情况',
       'operation_failed': '操作失败，请检查输入、密码或本机状态',
     };
     final code = labels.containsKey(raw) ? raw : 'operation_failed';
@@ -181,6 +189,34 @@ class ClientController extends ChangeNotifier {
     String? fingerprint,
   }) => _run(() async {
     if (isOpen) throw const DomainException('conflict', '');
+    // Validate before LocalProfile writes any public files or generates keys.
+    // Never expose arbitrary exceptions or echo the supplied password.
+    try {
+      normalizeAccountName(name);
+    } on FormatException {
+      throw const DomainException('invalid_account_name', '');
+    }
+    try {
+      validateDisplayName(displayName);
+    } on FormatException {
+      throw const DomainException('invalid_display_name', '');
+    }
+    try {
+      validatePassword(name, password);
+    } on FormatException {
+      throw const DomainException('invalid_password', '');
+    }
+    if (await _profileDirectory.exists() &&
+        !await _profileDirectory.list().isEmpty) {
+      final complete =
+          await File('${_profileDirectory.path}/account.keybox').exists() &&
+          await File('${_profileDirectory.path}/local-private.json').exists() &&
+          await File('${_profileDirectory.path}/unlock.factor').exists();
+      throw DomainException(
+        complete ? 'profile_exists' : 'incomplete_profile',
+        '',
+      );
+    }
     final manifest = communityJson == null || communityJson.trim().isEmpty
         ? null
         : CommunityManifest.fromJson(jsonObject(communityJson));

@@ -5,6 +5,19 @@ import 'package:zaizuo_core/zaizuo_core.dart';
 import 'package:zaizuo_runtime/zaizuo_runtime.dart';
 
 void main() {
+  test('invalid password never leaves partial bootstrap files', () async {
+    final root =
+        await Directory.systemTemp.createTemp('zaizuo-invalid-profile-');
+    addTearDown(() => root.delete(recursive: true));
+    await expectLater(
+        LocalProfile.initialize(root,
+            name: 'bbtest',
+            displayName: '测试员',
+            password: '123456789012',
+            parameters: const KdfParameters(memoryKiB: 32, iterations: 1)),
+        throwsFormatException);
+    expect(await root.list().isEmpty, isTrue);
+  });
   test('本机账号创建、密码解锁、加密资料防篡改与重启命令回放', () async {
     final root = await Directory.systemTemp.createTemp('zaizuo-profile-');
     addTearDown(() => root.delete(recursive: true));
