@@ -77,19 +77,45 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('从界面按钮写入的真实消息'), findsOneWidget);
     expect(client.messages, hasLength(1));
-    // Persistence and unlock use the same public controller API as the buttons;
-    // no host mouse/keyboard or window automation is involved.
-    final selected = client.selectedConversationId!;
-    await tester.runAsync(client.lock);
+    // Use the actual settings/lock controls, not a direct controller shortcut.
+    await tester.tap(find.byTooltip('设置与同步'));
     await tester.pumpAndSettle();
+    await click('锁定本机资料');
     expect(client.isOpen, isFalse);
-    await tester.runAsync(() => client.unlock('M8!vR2@kL9#sT6%z'));
-    client.selectConversation(selected);
+    await fill('密码', 'WrongLocal9!Only');
+    await click('解锁');
+    expect(client.isOpen, isFalse);
+    await fill('密码', 'M8!vR2@kL9#sT6%z');
+    await click('解锁');
+    expect(client.isOpen, isTrue);
+    await tester.tap(find.text('黑盒流程测试').first);
     await tester.pumpAndSettle();
     expect(find.text('从界面按钮写入的真实消息'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     await tester.runAsync(client.shutdown);
+    // A fresh controller + widget simulates an application relaunch without
+    // driving the host desktop or reading any real user's profile.
+    final reopened = (await tester.runAsync(
+      () async => ClientController(
+        root,
+        parameters: const KdfParameters(memoryKiB: 32, iterations: 1),
+      ),
+    ))!;
+    await tester.pumpWidget(ClientApp(root: root, controller: reopened));
+    await tester.runAsync(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+    });
+    await tester.pumpAndSettle();
+    await fill('密码', 'M8!vR2@kL9#sT6%z');
+    await click('解锁');
+    expect(reopened.isOpen, isTrue);
+    await tester.tap(find.text('黑盒流程测试').first);
+    await tester.pumpAndSettle();
+    expect(find.text('从界面按钮写入的真实消息'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(reopened.shutdown);
     await tester.runAsync(() => root.delete(recursive: true));
   });
 }
