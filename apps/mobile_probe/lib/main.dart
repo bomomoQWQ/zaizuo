@@ -22,7 +22,11 @@ void main(List<String> args) {
 }
 
 class MobileProbe extends StatefulWidget {
-  const MobileProbe({super.key});
+  const MobileProbe({super.key, this.onClose});
+
+  /// Desktop callers pass a close handler so this embedded page is not a
+  /// navigation dead end. Null keeps the original Android-only entry point.
+  final VoidCallback? onClose;
   @override
   State<MobileProbe> createState() => _MobileProbeState();
 }
@@ -42,6 +46,18 @@ class _MobileProbeState extends State<MobileProbe> {
   }
 
   Future<void> prepare() async {
+    if (!Platform.isAndroid) {
+      // Embedded on desktop: no Android bridge exists, and pretending it failed
+      // is misleading. Keep the page closable and state the real boundary.
+      if (mounted)
+        setState(() {
+          busy = false;
+          status = '此处只有 Android 专用的图片/凭据探针，桌面不适用；可关闭本页返回主界面。';
+          environment =
+              '当前平台：${Platform.operatingSystem}（非 Android）。\n桌面客户端的 Git 与聊天功能在主界面使用，不需要这个工具。';
+        });
+      return;
+    }
     try {
       final native = await channel.invokeMapMethod<String, dynamic>(
         'environment',
@@ -141,9 +157,39 @@ class _MobileProbeState extends State<MobileProbe> {
             child: ListView(
               padding: const EdgeInsets.all(18),
               children: [
-                const Text(
-                  '在座 · Android 验证壳',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                Row(
+                  children: [
+                    if (widget.onClose != null) ...[
+                      Semantics(
+                        button: true,
+                        label: '返回',
+                        child: GestureDetector(
+                          onTap: widget.onClose,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xffe8f1fb),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text('← 返回在座'),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
+                    const Expanded(
+                      child: Text(
+                        '在座 · 开发验证工具',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 10),
                 const Text(

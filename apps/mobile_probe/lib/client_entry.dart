@@ -232,7 +232,10 @@ class _ClientEntryState extends State<ClientEntry> {
         gitFactory: _gitFactory,
         configureGit: _configureGit,
         onDeveloperTools: () => navigatorKey.currentState?.push(
-          MaterialPageRoute<void>(builder: (_) => const MobileProbe()),
+          MaterialPageRoute<void>(
+            builder: (routeContext) =>
+                MobileProbe(onClose: () => Navigator.of(routeContext).pop()),
+          ),
         ),
       );
     },

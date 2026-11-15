@@ -28,9 +28,15 @@ void main() {
     );
     await tester.pumpWidget(const MobileProbe());
     await tester.pumpAndSettle();
-    expect(find.text('在座 · Android 验证壳'), findsOneWidget);
+    expect(find.text('在座 · 开发验证工具'), findsOneWidget);
     expect(find.textContaining('非完整 IM'), findsWidgets);
-    expect(find.textContaining('未配置 Git'), findsWidgets);
+    if (Platform.isAndroid) {
+      expect(find.textContaining('未配置 Git'), findsWidgets);
+    } else {
+      // Embedded on desktop the Android bridge is absent by design; the page
+      // must say so instead of claiming an environment failure.
+      expect(find.textContaining('非 Android'), findsOneWidget);
+    }
     expect(find.textContaining('内置 PNG'), findsOneWidget);
   });
 
