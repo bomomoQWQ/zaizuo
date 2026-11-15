@@ -20,3 +20,24 @@ recovery.txt
 state.enc
 onebot-ids.json
 onebot-ids.json.tmp
+
+# 客户端本机数据与凭据（便携模式下可能落在程序目录内）
+zaizuo-data/
+git-credentials/
+media-state.enc
+android-git-scope.json
+
+# 签名与证书材料
+*.jks
+*.keystore
+key.properties
+*.p12
+*.pfx
+
+# 工具与编辑器生成物
+*.log
+.idea/
+*.iml
+.flutter-plugins-dependencies
+__pycache__/
+*.pyc
