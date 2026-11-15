@@ -7,10 +7,18 @@ import 'package:flutter/widgets.dart';
 import 'probe_service.dart';
 import 'git_probe_panel.dart';
 import 'project_licenses.dart';
+import 'client_entry.dart';
 
-void main() {
+void main(List<String> args) {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MobileProbe());
+  final data = args.where((value) => value.startsWith('--data-dir='));
+  runApp(
+    ClientEntry(
+      dataDirectory: data.isEmpty
+          ? null
+          : data.first.substring('--data-dir='.length),
+    ),
+  );
 }
 
 class MobileProbe extends StatefulWidget {
