@@ -94,6 +94,41 @@ class _ClientEntryState extends State<ClientEntry> {
     bool useSaved,
     bool forget,
   ) async {
+    // Storage and validation failures must surface as stable Git codes, not the
+    // generic operation_failed fallback.
+    try {
+      await _configureGitInner(
+        client,
+        remote,
+        username,
+        token,
+        remember,
+        useSaved,
+        forget,
+      );
+    } on GitSyncException {
+      rethrow;
+    } on GitTokenStoreException catch (error) {
+      throw GitSyncException(
+        error.code == 'credential_unsupported'
+            ? 'credential_unsupported'
+            : error.code,
+        '本机令牌存储不可用',
+      );
+    } on ArgumentError {
+      throw const GitSyncException('invalid_credentials', 'HTTPS地址、用户名或令牌格式无效');
+    }
+  }
+
+  Future<void> _configureGitInner(
+    ClientController client,
+    String remote,
+    String username,
+    String? token,
+    bool remember,
+    bool useSaved,
+    bool forget,
+  ) async {
     final store = GitTokenStore(
       Directory(p.join(client.root.path, 'git-credentials')),
     );
@@ -104,6 +139,9 @@ class _ClientEntryState extends State<ClientEntry> {
       _sessionCredential = null;
       await store.delete(repositoryUrl: remote, username: username);
       return;
+    }
+    if (remote.trim().isEmpty || username.trim().isEmpty) {
+      throw const GitSyncException('invalid_credentials', '缺少仓库地址或用户名');
     }
     String? secret = token;
     if (secret == null && useSaved) {
