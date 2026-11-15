@@ -19,6 +19,7 @@ class ClientApp extends StatefulWidget {
     required this.root,
     this.controller,
     this.gitFactory,
+    this.configureGit,
     this.onDeveloperTools,
     this.navigatorKey,
   });
@@ -26,6 +27,16 @@ class ClientApp extends StatefulWidget {
   final Directory root;
   final ClientController? controller;
   final GitFactory? gitFactory;
+  final Future<void> Function(
+    ClientController client,
+    String remote,
+    String username,
+    String? token,
+    bool remember,
+    bool useSaved,
+    bool forget,
+  )?
+  configureGit;
   final VoidCallback? onDeveloperTools;
   final GlobalKey<NavigatorState>? navigatorKey;
 
@@ -916,105 +927,220 @@ class _ClientAppState extends State<ClientApp> {
   }
 
   Future<void> _settings() async {
-    final remote = TextEditingController();
+    final remote = TextEditingController(text: _client.gitRemote ?? '');
+    final username = TextEditingController(text: 'x-access-token');
+    final token = TextEditingController();
+    bool remember = false;
+    bool useSaved = false;
+    String? credentialStatus;
     await showModalBottomSheet<void>(
       context: _dialogContext,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (context) => AnimatedBuilder(
-        animation: _client,
-        builder: (context, _) {
-          final node = _client.node;
-          final status = node?.status();
-          return SafeArea(
-            child: SingleChildScrollView(
-              padding: EdgeInsets.fromLTRB(
-                24,
-                8,
-                24,
-                24 + MediaQuery.viewInsetsOf(context).bottom,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('设置与同步', style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 12),
-                  Text(
-                    node?.git == null
-                        ? '离线 · Git 未配置'
-                        : 'Git 已配置（不代表收件人在线或已收到）',
-                  ),
-                  Text(
-                    '最近同步：${node?.lastSyncAt?.toLocal().toString() ?? '尚无成功记录'}',
-                  ),
-                  Text('最近同步错误：${_fixedCode(node?.lastSyncError)}'),
-                  Text('被拒绝的命令：${status?['rejected_commands'] ?? 0}'),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: remote,
-                    enabled: !_client.busy,
-                    autocorrect: false,
-                    decoration: const InputDecoration(
-                      labelText: 'Git 远端',
-                      hintText: 'SSH 或不含凭据的 HTTPS 地址',
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) => AnimatedBuilder(
+          animation: _client,
+          builder: (context, _) {
+            final node = _client.node;
+            final status = node?.status();
+            return SafeArea(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(
+                  24,
+                  8,
+                  24,
+                  24 + MediaQuery.viewInsetsOf(context).bottom,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '设置与同步',
+                      style: Theme.of(context).textTheme.titleLarge,
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    '桌面使用系统 Git 与原生凭据助手；Android 由宿主提供 Git 实现。不在此输入密码或令牌。配置和手动同步由你明确触发。',
-                  ),
-                  const SizedBox(height: 12),
-                  if (_client.error != null) Text('操作未完成：${_client.error}'),
-                  FilledButton.tonal(
-                    onPressed: _client.busy
-                        ? null
-                        : () async {
-                            await _client.configureGit(remote.text.trim());
-                            if (_client.error == null) remote.clear();
-                          },
-                    child: const Text('配置 Git'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _client.busy || node?.git == null
-                        ? null
-                        : _client.sync,
-                    icon: const Icon(Icons.sync),
-                    label: const Text('手动同步'),
-                  ),
-                  const Divider(),
-                  if (widget.onDeveloperTools != null)
+                    const SizedBox(height: 12),
+                    Text(
+                      node?.git == null
+                          ? '离线 · Git 未配置'
+                          : 'Git 已配置（不代表收件人在线或已收到）',
+                    ),
+                    Text(
+                      '最近同步：${node?.lastSyncAt?.toLocal().toString() ?? '尚无成功记录'}',
+                    ),
+                    Text('最近同步错误：${_fixedCode(node?.lastSyncError)}'),
+                    Text('被拒绝的命令：${status?['rejected_commands'] ?? 0}'),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: remote,
+                      enabled: !_client.busy,
+                      autocorrect: false,
+                      decoration: const InputDecoration(
+                        labelText: 'Git 远端',
+                        hintText: 'SSH 或不含凭据的 HTTPS 地址',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      '令牌可选：填写后仅用于此 HTTPS 仓库，不写入 URL 或 Git 配置；未填且不选已保存令牌时，桌面使用系统凭据助手/匿名访问。配置不会立即同步。',
+                    ),
+                    const SizedBox(height: 12),
+                    if (widget.configureGit != null) ...[
+                      TextField(
+                        controller: username,
+                        enabled: !_client.busy,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        decoration: const InputDecoration(
+                          labelText: 'HTTPS 用户名',
+                          helperText: 'GitHub 通常可用你的用户名或 x-access-token',
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: token,
+                        enabled: !_client.busy,
+                        obscureText: true,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        enableIMEPersonalizedLearning: false,
+                        decoration: const InputDecoration(
+                          labelText: '访问令牌 PAT（可选）',
+                          helperText: '需有测试仓库读写权限；不会显示或回填已保存令牌',
+                        ),
+                      ),
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('加密保存在本机'),
+                        subtitle: const Text(
+                          'Windows DPAPI / Android Keystore，仅此仓库与用户名',
+                        ),
+                        value: remember,
+                        onChanged: _client.busy
+                            ? null
+                            : (v) => setSheetState(() => remember = v!),
+                      ),
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('使用此仓库已保存的令牌'),
+                        value: useSaved,
+                        onChanged: _client.busy
+                            ? null
+                            : (v) => setSheetState(() => useSaved = v!),
+                      ),
+                      TextButton(
+                        onPressed: _client.busy
+                            ? null
+                            : () async {
+                                try {
+                                  await widget.configureGit!(
+                                    _client,
+                                    remote.text.trim(),
+                                    username.text.trim(),
+                                    null,
+                                    false,
+                                    false,
+                                    true,
+                                  );
+                                  if (context.mounted)
+                                    setSheetState(
+                                      () => credentialStatus =
+                                          '已清除此范围的本机令牌，并关闭当前Git连接。',
+                                    );
+                                } catch (_) {
+                                  if (context.mounted)
+                                    setSheetState(
+                                      () => credentialStatus =
+                                          '清除失败，请检查仓库地址与本机安全存储。',
+                                    );
+                                }
+                              },
+                        child: const Text('清除已保存令牌并断开Git'),
+                      ),
+                    ],
+                    if (credentialStatus != null) Text(credentialStatus!),
+                    if (_client.error != null) Text('操作未完成：${_client.error}'),
+                    FilledButton.tonal(
+                      onPressed: _client.busy
+                          ? null
+                          : () async {
+                              try {
+                                if (widget.configureGit != null) {
+                                  await widget.configureGit!(
+                                    _client,
+                                    remote.text.trim(),
+                                    username.text.trim(),
+                                    token.text.isEmpty ? null : token.text,
+                                    remember,
+                                    useSaved,
+                                    false,
+                                  );
+                                } else {
+                                  await _client.configureGit(
+                                    remote.text.trim(),
+                                  );
+                                }
+                                if (context.mounted)
+                                  setSheetState(
+                                    () =>
+                                        credentialStatus = _client.error == null
+                                        ? 'Git配置完成，请手动同步验证权限。'
+                                        : 'Git配置未完成。',
+                                  );
+                              } catch (_) {
+                                if (context.mounted)
+                                  setSheetState(
+                                    () => credentialStatus =
+                                        '凭据配置失败：请检查HTTPS地址、用户名与安全存储状态。',
+                                  );
+                              } finally {
+                                token.clear();
+                              }
+                            },
+                      child: const Text('配置 Git'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _client.busy || node?.git == null
+                          ? null
+                          : _client.sync,
+                      icon: const Icon(Icons.sync),
+                      label: const Text('手动同步'),
+                    ),
+                    const Divider(),
+                    if (widget.onDeveloperTools != null)
+                      TextButton.icon(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          widget.onDeveloperTools!();
+                        },
+                        icon: const Icon(Icons.developer_mode),
+                        label: const Text('开发者工具'),
+                      ),
                     TextButton.icon(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        widget.onDeveloperTools!();
-                      },
-                      icon: const Icon(Icons.developer_mode),
-                      label: const Text('开发者工具'),
+                      onPressed: _client.busy
+                          ? null
+                          : () async {
+                              Navigator.pop(context);
+                              _draft.clear();
+                              await _client.lock();
+                              if (mounted)
+                                setState(() {
+                                  _create = false;
+                                  _mobileChat = false;
+                                });
+                            },
+                      icon: const Icon(Icons.lock_outline),
+                      label: const Text('锁定本机资料'),
                     ),
-                  TextButton.icon(
-                    onPressed: _client.busy
-                        ? null
-                        : () async {
-                            Navigator.pop(context);
-                            _draft.clear();
-                            await _client.lock();
-                            if (mounted)
-                              setState(() {
-                                _create = false;
-                                _mobileChat = false;
-                              });
-                          },
-                    icon: const Icon(Icons.lock_outline),
-                    label: const Text('锁定本机资料'),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
+    token.clear();
   }
 
   String _fixedCode(String? value) => value == null

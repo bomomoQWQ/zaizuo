@@ -133,6 +133,13 @@ class ClientController extends ChangeNotifier {
       'no_conversation': '请先选择会话',
       'unsupported_platform': '此平台尚未配置 Git 同步适配器',
       'git_failed': 'Git 同步失败，请检查仓库与凭据',
+      'authentication_failed': 'Git认证失败，请检查令牌是否有效',
+      'permission_denied': '令牌没有此仓库所需的访问或写入权限',
+      'repository_unavailable': '仓库不存在或当前身份不可见',
+      'network_unavailable': '无法连接Git服务器，请检查网络',
+      'tls_failed': 'Git服务器TLS证书验证失败',
+      'credentials_required': '没有找到此仓库已保存的令牌',
+      'invalid_credentials': '令牌或用户名格式、仓库绑定无效',
       'invalid_remote': 'Git 仓库地址无效',
       'unmanaged_repository': '同步目录不是受管空目录',
       'repository_identity': '同步目录身份不匹配',
@@ -350,6 +357,14 @@ class ClientController extends ChangeNotifier {
       deviceId: profile.device.certificate!.id,
     );
   }
+
+  Future<void> disconnectGit() => _run(() async {
+    final saved = _requireNode().profile;
+    await _detach();
+    _remote = null;
+    await _attach(saved);
+    notice = '已断开Git，消息仍保存在本机';
+  });
 
   Future<void> configureGit(String remote) => _run(() async {
     final saved = _requireNode().profile;

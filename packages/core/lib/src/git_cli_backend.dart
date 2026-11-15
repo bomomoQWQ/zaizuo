@@ -3,12 +3,15 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 import 'git_backend.dart';
+import 'git_https_token.dart';
 import 'git_sync.dart' show GitSyncException;
 
 /// Desktop implementation. No inherited Git configuration or shell evaluation.
 class GitCliBackend implements GitBackend {
   final String executable;
-  GitCliBackend({this.executable = 'git'});
+  GitHttpsToken? _credential;
+  GitCliBackend({this.executable = 'git', GitHttpsToken? credential})
+      : _credential = credential;
   late String _root;
   late String _remote;
   late Map<String, String> _environment;
@@ -22,12 +25,29 @@ class GitCliBackend implements GitBackend {
       {required String worktreePath,
       required String remoteUrl,
       required bool create}) async {
-    if (_opened) throw StateError('Git backend already bound');
+    if (_opened || _closed) throw StateError('Git backend already bound');
+    final credential = _credential;
+    if (credential != null) {
+      String canonical;
+      try {
+        canonical = GitHttpsToken.canonicalRepoUrl(remoteUrl);
+      } on ArgumentError {
+        throw const GitSyncException(
+            'credential_remote_mismatch', 'HTTPS凭据与远端仓库不匹配');
+      }
+      if (canonical != credential.repoUrl) {
+        throw const GitSyncException(
+            'credential_remote_mismatch', 'HTTPS凭据与远端仓库不匹配');
+      }
+      _remote = canonical;
+    } else {
+      _remote = remoteUrl;
+    }
     _opened = true;
     _root = worktreePath;
-    _remote = remoteUrl;
     _environment = cleanEnvironment();
-    if (remoteUrl.startsWith('https://'))
+    // Explicit credentials never discover or invoke system credential helpers.
+    if (credential == null && remoteUrl.startsWith('https://'))
       _helpers = await readCredentialHelpers(executable, _environment);
     if (create)
       await _run([
@@ -82,10 +102,40 @@ class GitCliBackend implements GitBackend {
       _root,
       ...args,
     ];
+    final processEnvironment = <String, String>{
+      ..._environment,
+      ...?environment,
+    };
+    final network = const {'fetch', 'push', 'ls-remote'}.contains(args.first);
+    final credential = _credential;
+    if (network && credential != null) {
+      // Only the exact bound HTTPS remote is reachable by these operations.
+      // A global per-process header avoids Git URL-path matching discrepancies
+      // (notably a repository URL without a trailing slash). Redirects and
+      // submodules are disabled; no helper receives this credential.
+      // The child environment is visible to sufficiently privileged/same-user
+      // processes: this is a same-user trust boundary, not secret isolation.
+      // No header enters argv, persistent config, or our error/log surface.
+      final config = <String, String>{
+        'http.extraHeader':
+            'Authorization: Basic ${base64Encode(utf8.encode('${credential.username}:${credential.token}'))}',
+        'http.followRedirects': 'false',
+        'http.sslVerify': 'true',
+        'credential.helper': '',
+        'credential.useHttpPath': 'true',
+      };
+      processEnvironment['GIT_CONFIG_COUNT'] = '${config.length}';
+      var index = 0;
+      for (final entry in config.entries) {
+        processEnvironment['GIT_CONFIG_KEY_$index'] = entry.key;
+        processEnvironment['GIT_CONFIG_VALUE_$index'] = entry.value;
+        index++;
+      }
+    }
     ProcessResult result;
     try {
       result = await Process.run(executable, command,
-          environment: {..._environment, ...?environment},
+          environment: processEnvironment,
           includeParentEnvironment: false,
           runInShell: false,
           stdoutEncoding: binary ? null : utf8,
@@ -94,9 +144,11 @@ class GitCliBackend implements GitBackend {
       throw const GitSyncException(
           'git_unavailable', '无法启动系统Git；请检查安装与受信任的可执行路径');
     }
-    if (!allowed.contains(result.exitCode))
+    if (!allowed.contains(result.exitCode)) {
+      if (network) throw _networkFailure(result.stderr as String);
       throw GitSyncException(
           'git_failed', 'Git ${args.first}失败（退出码${result.exitCode}）');
+    }
     return result;
   }
 
@@ -265,6 +317,34 @@ class GitCliBackend implements GitBackend {
   @override
   Future<void> close() async {
     _closed = true;
+    _credential = null;
+  }
+
+  // Inspect a bounded diagnostic solely to select a fixed, non-secret code.
+  // Never return stderr, stdout, a URL, or any substring from the child.
+  static GitSyncException _networkFailure(String stderr) {
+    final text =
+        stderr.substring(0, stderr.length.clamp(0, 16384)).toLowerCase();
+    if (RegExp(
+            r'\b401\b|auth ?failed|authentication ?failed|could not read username|could not read password|terminal prompts disabled')
+        .hasMatch(text)) {
+      return const GitSyncException('authentication_failed', 'HTTPS认证失败');
+    }
+    if (RegExp(r'\b403\b|permission denied').hasMatch(text)) {
+      return const GitSyncException('permission_denied', '远端拒绝访问');
+    }
+    if (RegExp(r'\b404\b|repository not found').hasMatch(text)) {
+      return const GitSyncException('repository_unavailable', '仓库不可用');
+    }
+    if (RegExp(r'certificate|ssl|tls').hasMatch(text)) {
+      return const GitSyncException('tls_failed', 'HTTPS证书或TLS验证失败');
+    }
+    if (RegExp(
+            r'could not resolve|couldn.t resolve|failed to connect|could not connect|connection refused|network is unreachable|connection timed out')
+        .hasMatch(text)) {
+      return const GitSyncException('network_unavailable', '无法连接远端');
+    }
+    return const GitSyncException('git_failed', 'Git网络操作失败');
   }
 
   static Map<String, String> cleanEnvironment() {

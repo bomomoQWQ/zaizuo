@@ -11,7 +11,8 @@ import 'package:zaizuo_git_mobile/git_mobile.dart';
 import 'package:zaizuo_runtime/zaizuo_runtime.dart';
 
 import 'client_app.dart';
-import 'git_credentials.dart';
+import 'git_token_store.dart';
+import 'client_controller.dart';
 import 'main.dart' show MobileProbe;
 
 String startupFailureCode(Object error) => switch (error) {
@@ -33,6 +34,101 @@ class ClientEntry extends StatefulWidget {
 
 class _ClientEntryState extends State<ClientEntry> {
   final navigatorKey = GlobalKey<NavigatorState>();
+  GitHttpsToken? _sessionCredential;
+
+  Future<GitSync> _gitFactory(
+    LocalProfile profile,
+    String remote,
+    Directory dir,
+  ) async {
+    final credential = _sessionCredential;
+    if (Platform.isAndroid) {
+      if (credential == null) {
+        final backend = EmbeddedGitBackend(
+          bundledCaPath:
+              await EmbeddedGitBackend.initializeAndroidCertificates(),
+        );
+        return GitSync.initializeWithBackend(
+          backend: backend,
+          worktree: dir,
+          remoteUrl: remote,
+          deviceId: profile.device.certificate!.id,
+        );
+      }
+      final backend = EmbeddedGitBackend(
+        bundledCaPath: await EmbeddedGitBackend.initializeAndroidCertificates(),
+        credential: GitHttpsCredential(
+          repositoryUrl: remote,
+          username: credential.username,
+          personalAccessToken: credential.token,
+        ),
+      );
+      return GitSync.initializeWithBackend(
+        backend: backend,
+        worktree: dir,
+        remoteUrl: remote,
+        deviceId: profile.device.certificate!.id,
+      );
+    }
+    if (credential != null) {
+      return GitSync.initializeWithBackend(
+        backend: GitCliBackend(credential: credential),
+        worktree: dir,
+        remoteUrl: remote,
+        deviceId: profile.device.certificate!.id,
+      );
+    }
+    return GitSync.initialize(
+      worktree: dir,
+      remoteUrl: remote,
+      deviceId: profile.device.certificate!.id,
+    );
+  }
+
+  Future<void> _configureGit(
+    ClientController client,
+    String remote,
+    String username,
+    String? token,
+    bool remember,
+    bool useSaved,
+    bool forget,
+  ) async {
+    final store = GitTokenStore(
+      Directory(p.join(client.root.path, 'git-credentials')),
+    );
+    if (forget) {
+      await client.disconnectGit();
+      if (client.error != null)
+        throw const GitSyncException('git_failed', '未能断开当前连接');
+      _sessionCredential = null;
+      await store.delete(repositoryUrl: remote, username: username);
+      return;
+    }
+    String? secret = token;
+    if (secret == null && useSaved) {
+      secret = await store.read(repositoryUrl: remote, username: username);
+      if (secret == null)
+        throw const GitSyncException('credentials_required', '此范围无已保存令牌');
+    }
+    final credential = secret == null
+        ? null
+        : GitHttpsToken(repoUrl: remote, username: username, token: secret);
+    if (credential != null && remember && token != null) {
+      await store.save(
+        repositoryUrl: remote,
+        username: username,
+        token: secret!,
+      );
+    }
+    _sessionCredential = credential;
+    try {
+      await client.configureGit(remote);
+    } finally {
+      _sessionCredential = null;
+    }
+  }
+
   late Future<Directory> root = _root();
   String? _selectedDirectory;
 
@@ -74,100 +170,6 @@ class _ClientEntryState extends State<ClientEntry> {
     final directory = Directory(path);
     await directory.create(recursive: true);
     return Directory(await directory.resolveSymbolicLinks());
-  }
-
-  Future<GitSync> _androidGit(
-    LocalProfile profile,
-    String remote,
-    Directory dir,
-  ) async {
-    // PAT is supplied explicitly through the client credential dialog.
-    // Username is local configuration, never read from host helpers or environment.
-    final scopeFile = File(
-      p.join(profile.root.parent.path, 'android-git-scope.json'),
-    );
-    Map<String, dynamic>? scope;
-    if (await scopeFile.exists()) {
-      if (await scopeFile.length() > 8192) {
-        throw const GitSyncException('invalid_credentials', '本机凭据范围无效');
-      }
-      scope = jsonObject(await scopeFile.readAsString());
-    }
-    if (scope == null ||
-        scope['repo'] != GitCredentialScope.canonicalRepo(remote)) {
-      final username = TextEditingController();
-      final token = TextEditingController();
-      final context = navigatorKey.currentContext;
-      if (context == null)
-        throw const GitSyncException('credentials_required', '需要凭据');
-      final accepted = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Git HTTPS 凭据'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('仅用于指定测试仓库。PAT 经 Android Keystore 加密保存在本机。'),
-              TextField(
-                controller: username,
-                decoration: const InputDecoration(labelText: '用户名'),
-              ),
-              TextField(
-                controller: token,
-                obscureText: true,
-                autocorrect: false,
-                enableSuggestions: false,
-                decoration: const InputDecoration(labelText: '最小权限 PAT'),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('保存并连接'),
-            ),
-          ],
-        ),
-      );
-      try {
-        if (accepted != true)
-          throw const GitSyncException('credentials_required', '未提供凭据');
-        final selected = GitCredentialScope(remote, username.text.trim());
-        await const AndroidGitCredentialStore().save(selected, token.text);
-        scope = {'repo': selected.repoUrl, 'username': selected.username};
-        await scopeFile.writeAsString(canonicalJson(scope), flush: true);
-      } finally {
-        token.clear();
-        token.dispose();
-        username.dispose();
-      }
-    }
-    final credentialScope = GitCredentialScope(
-      readString(scope, 'repo'),
-      readString(scope, 'username'),
-    );
-    if (credentialScope.repoUrl != GitCredentialScope.canonicalRepo(remote)) {
-      throw const GitSyncException('invalid_credentials', '凭据未绑定此仓库');
-    }
-    final token = await const AndroidGitCredentialStore().read(credentialScope);
-    final backend = EmbeddedGitBackend(
-      bundledCaPath: await EmbeddedGitBackend.initializeAndroidCertificates(),
-      credential: GitHttpsCredential(
-        repositoryUrl: remote,
-        username: credentialScope.username,
-        personalAccessToken: token,
-      ),
-    );
-    return GitSync.initializeWithBackend(
-      backend: backend,
-      worktree: dir,
-      remoteUrl: remote,
-      deviceId: profile.device.certificate!.id,
-    );
   }
 
   @override
@@ -227,7 +229,8 @@ class _ClientEntryState extends State<ClientEntry> {
       return ClientApp(
         root: result.data!,
         navigatorKey: navigatorKey,
-        gitFactory: Platform.isAndroid ? _androidGit : null,
+        gitFactory: _gitFactory,
+        configureGit: _configureGit,
         onDeveloperTools: () => navigatorKey.currentState?.push(
           MaterialPageRoute<void>(builder: (_) => const MobileProbe()),
         ),
