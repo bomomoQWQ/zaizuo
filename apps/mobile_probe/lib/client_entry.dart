@@ -14,6 +14,15 @@ import 'client_app.dart';
 import 'git_credentials.dart';
 import 'main.dart' show MobileProbe;
 
+String startupFailureCode(Object error) => switch (error) {
+  FileSystemException() => 'directory_io_${error.osError?.errorCode ?? 0}',
+  MissingPluginException() => 'path_plugin_missing',
+  PlatformException() => 'path_platform_failure',
+  ArgumentError() => 'path_argument_failure',
+  StateError() => 'path_state_failure',
+  _ => 'path_initialization_failure',
+};
+
 /// Resolves only local application storage; startup never contacts a remote.
 class ClientEntry extends StatefulWidget {
   const ClientEntry({super.key, this.dataDirectory});
@@ -24,14 +33,27 @@ class ClientEntry extends StatefulWidget {
 
 class _ClientEntryState extends State<ClientEntry> {
   final navigatorKey = GlobalKey<NavigatorState>();
-  late final Future<Directory> root = _root();
+  late Future<Directory> root = _root();
+  String? _selectedDirectory;
+
+  void _retry({bool portable = false}) {
+    if (portable) {
+      _selectedDirectory = p.join(
+        File(Platform.resolvedExecutable).parent.path,
+        'zaizuo-data',
+      );
+    }
+    setState(() => root = _root());
+  }
+
   Future<Directory> _root() async {
     String path;
-    if (widget.dataDirectory != null) {
-      if (!p.isAbsolute(widget.dataDirectory!)) {
+    final explicitDirectory = _selectedDirectory ?? widget.dataDirectory;
+    if (explicitDirectory != null) {
+      if (!p.isAbsolute(explicitDirectory)) {
         throw StateError('data_directory_must_be_absolute');
       }
-      path = widget.dataDirectory!;
+      path = explicitDirectory;
     } else if (Platform.isAndroid) {
       final value = await const MethodChannel('zaizuo.mobile_probe/native')
           .invokeMapMethod<String, dynamic>('environment');
@@ -39,7 +61,15 @@ class _ClientEntryState extends State<ClientEntry> {
       if (native is! String) throw StateError('private_directory_unavailable');
       path = p.join(native, 'client');
     } else {
-      path = p.join((await getApplicationSupportDirectory()).path, 'client');
+      try {
+        path = p.join((await getApplicationSupportDirectory()).path, 'client');
+      } on FileSystemException catch (error) {
+        throw FileSystemException(
+          'support_directory',
+          error.path,
+          error.osError,
+        );
+      }
     }
     final directory = Directory(path);
     await directory.create(recursive: true);
@@ -150,7 +180,45 @@ class _ClientEntryState extends State<ClientEntry> {
           home: Scaffold(
             body: Center(
               child: result.hasError
-                  ? const Text('无法打开本机测试资料目录。请检查目录权限。')
+                  ? ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 640),
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Text(
+                              '无法打开默认资料目录',
+                              style: TextStyle(fontSize: 24),
+                            ),
+                            const SizedBox(height: 12),
+                            SelectableText(
+                              '诊断：${startupFailureCode(result.error!)}\n${result.error is FileSystemException ? (result.error as FileSystemException).path : ''}',
+                            ),
+                            const SizedBox(height: 12),
+                            const Text(
+                              '未改动已有资料。不需要管理员运行，也不会自动修改 Windows 文件权限。',
+                            ),
+                            const SizedBox(height: 16),
+                            FilledButton(
+                              onPressed: () => _retry(),
+                              child: const Text('重试默认目录'),
+                            ),
+                            if (Platform.isWindows || Platform.isLinux) ...[
+                              const SizedBox(height: 8),
+                              OutlinedButton(
+                                onPressed: () => _retry(portable: true),
+                                child: const Text('使用程序旁的便携资料目录'),
+                              ),
+                              const Text(
+                                '新资料存入 exe 旁的 zaizuo-data。请将整个程序解压到自己可写的文件夹；已有资料不会自动迁移。不要在共享或临时目录存放真实账户。',
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    )
                   : const CircularProgressIndicator(),
             ),
           ),
