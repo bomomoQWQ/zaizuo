@@ -113,6 +113,10 @@ class ClientController extends ChangeNotifier {
     }
   }
 
+  /// Test-only seam: exercises the same error mapping the UI uses.
+  @visibleForTesting
+  Future<T> queueForTest<T>(Future<T> Function() action) => _queue(action);
+
   static DomainException _safeError(Object cause) {
     final raw = cause is DomainException
         ? cause.code
@@ -120,6 +124,14 @@ class ClientController extends ChangeNotifier {
         ? cause.code
         : cause is FileSystemException
         ? 'directory_io'
+        : cause is StateError
+        ? 'state_error'
+        : cause is TimeoutException
+        ? 'timeout'
+        : cause is ArgumentError ||
+              cause is RangeError ||
+              cause is FormatException
+        ? 'invalid_argument'
         : 'operation_failed';
     const labels = <String, String>{
       'bad_request': '输入无效',
@@ -156,10 +168,16 @@ class ClientController extends ChangeNotifier {
       'profile_exists': '此目录已有账号资料，请切换到解锁，不要重复创建',
       'incomplete_profile': '上次创建留下了不完整资料，已保留原文件；请选择新的空数据目录再创建',
       'directory_io': '本地数据写入失败，请检查可用空间与目录访问情况',
+      'state_error': '客户端状态异常，请锁定后重试或重启程序',
+      'timeout': '操作超时，请稍后重试',
+      'invalid_argument': '本机数据或参数格式不符合预期',
       'operation_failed': '操作失败，请检查输入、密码或本机状态',
     };
     final code = labels.containsKey(raw) ? raw : 'operation_failed';
-    return DomainException(code, '${labels[code]} [$code]');
+    // Only the fallback carries the runtime type: it is a bounded identifier and
+    // never includes messages, paths, URLs or secrets.
+    final suffix = code == 'operation_failed' ? ' (${cause.runtimeType})' : '';
+    return DomainException(code, '${labels[code]} [$code]$suffix');
   }
 
   ZaizuoNode _requireNode() {
