@@ -62,7 +62,8 @@ class GitCliBackend implements GitBackend {
   Future<ProcessResult> _run(List<String> args,
       {Set<int> allowed = const {0},
       Map<String, String>? environment,
-      bool binary = false}) async {
+      bool binary = false,
+      bool http11 = false}) async {
     if (!_opened || _closed) throw StateError('Git backend is not open');
     final command = <String>[
       '--no-pager',
@@ -95,6 +96,9 @@ class GitCliBackend implements GitBackend {
       'core.fsmonitor=false',
       '-c',
       'core.untrackedCache=false',
+      // Local HTTP proxies/accelerators can break Git's HTTP/2 upload with a
+      // 502 gateway error while still serving reads. Retried once below.
+      if (http11) ...['-c', 'http.version=HTTP/1.1'],
       '-c',
       'credential.helper=',
       for (final helper in _helpers) ...['-c', 'credential.helper=$helper'],
@@ -145,7 +149,18 @@ class GitCliBackend implements GitBackend {
           'git_unavailable', '无法启动系统Git；请检查安装与受信任的可执行路径');
     }
     if (!allowed.contains(result.exitCode)) {
-      if (network) throw _networkFailure(result.stderr as String);
+      if (network) {
+        final failure = _networkFailure(result.stderr as String);
+        if (failure.code == 'remote_gateway_failed' && !http11) {
+          // One HTTP/1.1 retry for proxies that break HTTP/2 uploads.
+          return _run(args,
+              allowed: allowed,
+              environment: environment,
+              binary: binary,
+              http11: true);
+        }
+        throw failure;
+      }
       throw GitSyncException(
           'git_failed', 'Git ${args.first}失败（退出码${result.exitCode}）');
     }
@@ -320,6 +335,10 @@ class GitCliBackend implements GitBackend {
     _credential = null;
   }
 
+  /// Exposed for tests. Returns only fixed codes and never child output.
+  static GitSyncException classifyNetworkFailure(String stderr) =>
+      _networkFailure(stderr);
+
   // Inspect a bounded diagnostic solely to select a fixed, non-secret code.
   // Never return stderr, stdout, a URL, or any substring from the child.
   static GitSyncException _networkFailure(String stderr) {
@@ -335,6 +354,12 @@ class GitCliBackend implements GitBackend {
     }
     if (RegExp(r'\b404\b|repository not found').hasMatch(text)) {
       return const GitSyncException('repository_unavailable', '仓库不可用');
+    }
+    if (RegExp(
+            r'\b(502|503|504)\b|bad gateway|service unavailable|gateway time-?out')
+        .hasMatch(text)) {
+      return const GitSyncException(
+          'remote_gateway_failed', 'Git服务或中间代理返回网关错误');
     }
     if (RegExp(r'certificate|ssl|tls').hasMatch(text)) {
       return const GitSyncException('tls_failed', 'HTTPS证书或TLS验证失败');
