@@ -10,6 +10,9 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -20,6 +23,7 @@ SPEC = importlib.util.spec_from_file_location(
 pack = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(pack)
 REF = "a" * 40
+POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
 
 
 class StageFlutterWindowsTest(unittest.TestCase):
@@ -94,6 +98,156 @@ class StageFlutterWindowsTest(unittest.TestCase):
         self.assertEqual((archive.parent / (archive.name + ".sha256")).read_text(),
                          f"{pack.file_hash(archive)}  {archive.name}\n")
         self.assertFalse(any(p.name.startswith(f".{stage.name}-verify-") for p in stage.parent.iterdir()))
+
+    def run_verifier(self, stage: Path, *arguments: str):
+        # 只允许 VerifyOnly；测试永远不运行 fixture EXE，更不运行真实客户端。
+        result = subprocess.run([POWERSHELL, "-NoLogo", "-NoProfile", "-File",
+                                 str(stage / "verify-and-start.ps1"), "-VerifyOnly", *arguments],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=30, check=False)
+        denied = (b"AuthorizationManager check failed.\n"
+                  b"    + CategoryInfo          : SecurityError: (:) [], ParentContainsErrorRecordException\n"
+                  b"    + FullyQualifiedErrorId : UnauthorizedAccess")
+        if (result.returncode == 1 and not result.stdout and
+                result.stderr.replace(b"\r\n", b"\n").strip() == denied):
+            # 仅精确的宿主 pre-script 拒绝可 skip；禁止改策略、Bypass 或动态加载执行。
+            self.skipTest("host AuthorizationManager rejects fixture -File before script execution")
+        return result
+
+    def assert_verification_failure(self, result):
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, b"")
+        # Windows PowerShell 重定向 stderr 常用 OEM 编码；错误文本须仍是同一固定中文行。
+        accepted = [pack.VERIFY_FAILURE.encode(encoding, errors="replace")
+                    for encoding in ("utf-8", "gbk", "cp936")]
+        self.assertIn(result.stderr.strip(), accepted)
+        self.assertNotIn(str(self.root).encode("utf-8"), result.stderr)
+
+    def test_entrypoints_docs_and_manifest_preserve_source_set(self):
+        result, stage, archive = self.build()
+        sources = pack.collect_sources(self.root)
+        metadata = json.loads((stage / "BUILD.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(metadata["copied_files"]), set(sources))
+        checksums = {line[66:]: line[:64] for line in
+                     (stage / "SHA256SUMS").read_text(encoding="utf-8").splitlines()}
+        expected = set(sources) | set(pack.GENERATED_FILES)
+        self.assertEqual(set(checksums), expected)
+        self.assertEqual(set(pack.tree_files(stage)), expected | {"SHA256SUMS"})
+        self.assertEqual(result["verified_file_count"], len(expected) + 1)
+        for name, digest in checksums.items():
+            self.assertEqual(pack.file_hash(stage / name), digest)
+        with zipfile.ZipFile(archive) as bundle:
+            self.assertEqual(set(bundle.namelist()),
+                             {f"{stage.name}/{name}" for name in expected | {"SHA256SUMS"}})
+        ps_bytes = (stage / "verify-and-start.ps1").read_bytes()
+        self.assertTrue(ps_bytes.startswith(b"\xef\xbb\xbf"))
+        ps = ps_bytes.decode("utf-8-sig")
+        self.assertEqual(set(re.findall(r"^    '((?:[^'\r\n]|'')*)'\r?$", ps, re.MULTILINE)),
+                         {name.replace("'", "''") for name in expected})
+        self.assertIn(pack.VERIFY_FAILURE, ps)
+        self.assertIn('& $executable "--data-dir=$DataDirectory"', ps)
+        self.assertIn("if ($VerifyOnly) { exit 0 }", ps)
+        for forbidden in ("$env:", "$PROFILE", "Get-ChildItem", "New-Item", "Start-Process",
+                          "ExecutionPolicy", "RunAs", "Set-Content", "Test-Path -LiteralPath $DataDirectory"):
+            self.assertNotIn(forbidden, ps)
+        cmd = (stage / "start-verified.cmd").read_bytes().decode("ascii")
+        self.assertIn("pwsh.exe -NoLogo -NoProfile -File", cmd)
+        self.assertIn("powershell.exe -NoLogo -NoProfile -File", cmd)
+        self.assertIn('"%~dp0verify-and-start.ps1" %*', cmd)
+        self.assertNotIn("ExecutionPolicy", cmd)
+        self.assertNotIn("RunAs", cmd)
+        readme = (stage / "README.md").read_text(encoding="utf-8")
+        for text in ("不能把旧 test4/test9", "`data` 是程序代码", "`zaizuo-data` 是私人账号目录",
+                     "不要进包", "-DataDirectory", "不移动、不复制", "同一个私人目录不能多开",
+                     "-VerifyOnly", "不读取 PowerShell profile", "不修改执行策略", "直接运行 EXE 不会自动校验"):
+            self.assertIn(text, readme)
+
+    def test_existing_generated_verifier_tamper_is_detected(self):
+        _, stage, archive = self.build()
+        sources, copied = self.verification_inputs(stage)
+        self.put(stage / "verify-and-start.ps1", b"replaced-verifier")
+        with self.assertRaisesRegex(pack.PackagingError, "stage_hash_mismatch"):
+            pack.verify_package(stage, archive, sources, copied)
+
+    @unittest.skipUnless(os.name == "nt" and POWERSHELL, "requires Windows PowerShell")
+    def test_powershell_generated_script_parses_without_running_it(self):
+        _, stage, _ = self.build()
+        script = str(stage / "verify-and-start.ps1").replace("'", "''")
+        # 只用 Parser.ParseFile 获取 AST；不创建 ScriptBlock、不 Invoke、不绕 -File 策略。
+        command = ("$tokens=$null; $errors=$null; "
+                   "[void][Management.Automation.Language.Parser]::ParseFile('" + script + "',"
+                   "[ref]$tokens,[ref]$errors); if ($errors.Count -ne 0) { exit 1 }; exit 0")
+        result = subprocess.run([POWERSHELL, "-NoLogo", "-NoProfile", "-Command", command],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=30, check=False)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"", b""))
+
+    @unittest.skipUnless(os.name == "nt" and POWERSHELL, "requires Windows PowerShell")
+    def test_powershell_verify_only_accepts_package_and_rejects_stale_aot(self):
+        _, stage, _ = self.build()
+        # DataDirectory 即使含空格/中文且不存在也不被检查/创建；旁目录故意放未知资料。
+        private = self.root / "old test9 私人目录/zaizuo-data"
+        self.assertFalse(private.exists())
+        self.put(stage / "zaizuo-data/profile/NEVER-READ.txt", b"fake-private-only")
+        good = self.run_verifier(stage, "-DataDirectory", str(private))
+        self.assertEqual((good.returncode, good.stdout, good.stderr), (0, b"", b""))
+        self.assertFalse(private.exists())
+        # 假 EXE 从未执行；只把旧 AOT 覆进包，真实 PS 哈希分支必须拒绝。
+        self.put(stage / "data/app.so", b"old-test4-code")
+        self.assert_verification_failure(self.run_verifier(stage))
+        self.assertFalse(private.exists())
+
+    @unittest.skipUnless(os.name == "nt" and POWERSHELL, "requires Windows PowerShell")
+    def test_powershell_rejects_manifest_escape_duplicate_missing_and_unlisted_paths(self):
+        _, stage, _ = self.build()
+        manifest = stage / "SHA256SUMS"
+        original = manifest.read_text(encoding="utf-8")
+        lines = original.splitlines(keepends=True)
+        outside = self.root / "NEVER-READ.txt"
+        self.put(outside, b"fake-outside")
+        self.assertEqual(self.run_verifier(stage).returncode, 0)
+        for mutation in (original + lines[0], "".join(lines[1:]),
+                         original + "0" * 64 + "  ../NEVER-READ.txt\n",
+                         original + "0" * 64 + "  data/../NEVER-READ.txt\n",
+                         original + "0" * 64 + "  zaizuo-data/profile/NEVER-READ.txt\n",
+                         original + "0" * 64 + "  C:/NEVER-READ.txt\n",
+                         original + "0" * 64 + "  data\\app.so\n"):
+            with self.subTest(mutation=mutation[-80:]):
+                manifest.write_text(mutation, encoding="utf-8", newline="\n")
+                self.assert_verification_failure(self.run_verifier(stage))
+        manifest.write_text(original, encoding="utf-8", newline="\n")
+        missing = stage / "BUILD.json"
+        self.assertEqual(missing.parent, stage)
+        missing.unlink()
+        self.assert_verification_failure(self.run_verifier(stage))
+        self.assertEqual(outside.read_bytes(), b"fake-outside")
+
+    @unittest.skipUnless(os.name == "nt" and POWERSHELL, "requires Windows PowerShell")
+    def test_powershell_rejects_relative_or_injected_data_directory_without_creating_it(self):
+        _, stage, _ = self.build()
+        self.assertEqual(self.run_verifier(stage).returncode, 0)
+        for value in ("relative/zaizuo-data", "C:relative", "\\relative", "", 'C:\\bad"quote',
+                      "C:\\bad\r\ninjected", "\\\\?\\C:\\device"):
+            with self.subTest(value=value):
+                self.assert_verification_failure(self.run_verifier(stage, "-DataDirectory", value))
+        self.assertFalse((stage / "relative").exists())
+
+    @unittest.skipUnless(os.name == "nt" and POWERSHELL, "requires Windows PowerShell")
+    def test_powershell_rejects_linked_manifest_entry(self):
+        _, stage, _ = self.build()
+        target = stage / "data/app.so"
+        old = target.read_bytes()
+        self.assertEqual(target.parent, stage / "data")
+        target.unlink()
+        external = self.root / "fake-aot-target"
+        self.put(external, old)
+        try:
+            os.symlink(external, target)
+        except (OSError, NotImplementedError):
+            self.put(target, old)
+            self.skipTest("fixture host does not permit symlink creation")
+        self.assert_verification_failure(self.run_verifier(stage))
+        self.assertEqual(external.read_bytes(), old)
 
     def test_existing_stage_archive_or_digest_refuses_without_overwrite(self):
         output = self.root / "dist/packages"

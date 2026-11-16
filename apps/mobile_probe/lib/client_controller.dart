@@ -145,6 +145,7 @@ class ClientController extends ChangeNotifier {
       'no_conversation': '请先选择会话',
       'unsupported_platform': '此平台尚未配置 Git 同步适配器',
       'git_failed': 'Git 同步失败，请检查仓库与凭据',
+      'git_path_too_long': '本机Git路径过长，未完成同步；请保留资料并检查客户端版本和存放路径',
       'remote_gateway_failed': 'Git服务或本地代理返回网关错误（502/503），已尝试HTTP/1.1仍失败',
       'authentication_failed': 'Git认证失败，请检查令牌是否有效',
       'permission_denied': '令牌没有此仓库所需的访问或写入权限',

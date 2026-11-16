@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """只打包已完成的 Windows Release；不构建、不运行应用、不读取用户资料。
 
-python tools/package/stage-flutter-windows.py --version ui-test9 \
-    --build-label ui-test9 [--source-ref FULL_COMMIT] [--project-root auto]
+python tools/package/stage-flutter-windows.py --version ui-test10 \
+    --build-label ui-test10 [--source-ref FULL_COMMIT] [--project-root auto]
 
 输出 dist/packages/zaizuo-client-VERSION-windows-x64{/, .zip, .zip.sha256}。
 拒绝覆盖旧输出；失败可能留下新的不完整输出，必须换版本或人工核查。
@@ -49,6 +49,8 @@ RESERVED = {"con", "prn", "aux", "nul"} | {
 }
 SOURCE_REPOSITORY = "https://github.com/bomomoQWQ/zaizuo"
 PUBLIC_CA = ("packages", "git2dart_binaries", "assets", "certs", "cacert.pem")
+GENERATED_FILES = ("BUILD.json", "SOURCE.md", "README.md", "verify-and-start.ps1", "start-verified.cmd")
+VERIFY_FAILURE = "校验失败：程序包文件缺失、被替换或清单无效；未启动在座。请重新解压完整新包，勿覆盖 data。"
 
 
 class PackagingError(Exception):
@@ -243,6 +245,173 @@ def write_new(path: Path, text: str) -> None:
         output.write(text)
 
 
+def windows_entrypoints(expected_files: list[str]) -> tuple[str, str]:
+    """固定本包文件白名单；不枚举未知目录，也不读取/修改私人资料目录。"""
+    require(len(expected_files) == len(set(expected_files)), "duplicate_launcher_entry")
+    for name in expected_files:
+        safe_relative(name)
+    # PowerShell 单引号字面量：文件名中的 ' 必须成对转义，不能插入脚本。
+    allowlist = "\n".join("    '" + name.replace("'", "''") + "'" for name in sorted(expected_files))
+    ps1 = r'''# 在座：只验证本包白名单文件；不扫描或读取私人账号目录。
+[CmdletBinding()]
+param([string]$DataDirectory, [switch]$VerifyOnly)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+function Assert-PackageEntry {
+    param([string]$Root, [string]$Relative, [bool]$Directory = $false)
+    # Relative 已经通过白名单/路径语法校验。逐级查属性，不遍历目录。
+    $current = $Root
+    $rootItem = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+    if (-not $rootItem.PSIsContainer -or
+        (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+        throw 'invalid-package-root'
+    }
+    $parts = $Relative.Split([char]'/')
+    for ($index = 0; $index -lt $parts.Length; $index++) {
+        $current = [IO.Path]::Combine($current, $parts[$index])
+        $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'linked-package-entry'
+        }
+        $wantDirectory = ($index -lt ($parts.Length - 1)) -or $Directory
+        if ([bool]$item.PSIsContainer -ne $wantDirectory -or
+            (-not $wantDirectory -and $item -isnot [IO.FileInfo])) {
+            throw 'invalid-package-entry'
+        }
+    }
+    return $current
+}
+
+function Test-PackageIntegrity {
+    param([string]$Root)
+    # 此列表由打包时的 source set + 固定 generated files 生成；绝不全盘扫描。
+    $expectedFiles = @(
+__ALLOWLIST__
+    )
+    $allowed = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($entry in $expectedFiles) { [void]$allowed.Add($entry) }
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $manifest = Assert-PackageEntry -Root $Root -Relative 'SHA256SUMS'
+    foreach ($line in [IO.File]::ReadAllLines($manifest, [Text.Encoding]::UTF8)) {
+        if ($line -cnotmatch '^([0-9a-f]{64})  (.+)$') { throw 'invalid-manifest' }
+        $hash = $Matches[1]
+        $relative = $Matches[2]
+        if ($relative.Contains('\') -or $relative.Contains(':') -or
+            [IO.Path]::IsPathRooted($relative)) { throw 'unsafe-manifest-path' }
+        foreach ($part in $relative.Split([char]'/')) {
+            if ([string]::IsNullOrEmpty($part) -or $part -eq '.' -or $part -eq '..' -or
+                $part.EndsWith(' ') -or $part.EndsWith('.') -or
+                $part.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+                throw 'unsafe-manifest-path'
+            }
+        }
+        if (-not $allowed.Contains($relative) -or -not $seen.Add($relative)) {
+            throw 'unexpected-or-duplicate-manifest-path'
+        }
+        $path = Assert-PackageEntry -Root $Root -Relative $relative
+        $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256 -ErrorAction Stop).Hash
+        if ($actual -ine $hash) { throw 'package-hash-mismatch' }
+    }
+    if ($seen.Count -ne $allowed.Count) { throw 'incomplete-manifest' }
+}
+
+try {
+    if ($PSBoundParameters.ContainsKey('DataDirectory')) {
+        # 仅检查参数语法，不 Test-Path、不建目录、不读账号/令牌。拒绝 C:relative / \relative。
+        if ([string]::IsNullOrWhiteSpace($DataDirectory) -or
+            $DataDirectory -cnotmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$))' -or
+            $DataDirectory -match '[\x00-\x1f"<>|?*]' -or
+            $DataDirectory.StartsWith('\\?\') -or $DataDirectory.StartsWith('\\.\')) {
+            throw 'absolute-data-directory-required'
+        }
+    }
+    Test-PackageIntegrity -Root $PSScriptRoot
+} catch {
+    [Console]::Error.WriteLine('__VERIFY_FAILURE__')
+    exit 1
+}
+
+# 可供静态验包；不会运行客户端，也不访问 DataDirectory。
+if ($VerifyOnly) { exit 0 }
+
+# 在校验全部通过前绝不启动。& 按单一参数传递含空格/中文的绝对目录，保留前台终端。
+$executable = [IO.Path]::Combine($PSScriptRoot, 'zaizuo_mobile_probe.exe')
+try {
+    if ($PSBoundParameters.ContainsKey('DataDirectory')) {
+        & $executable "--data-dir=$DataDirectory"
+    } else {
+        # 不附加 data-dir；保留应用原有默认启动行为，不由本脚本创建或迁移 profile。
+        & $executable
+    }
+    if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }
+} catch {
+    [Console]::Error.WriteLine('启动失败：无法运行已校验的在座客户端。')
+    exit 1
+}
+'''.replace("__ALLOWLIST__", allowlist).replace("__VERIFY_FAILURE__", VERIFY_FAILURE)
+    # ASCII 文件名/内容兼容 CMD；不要执行策略绕过、提权或读取 PowerShell profile。
+    cmd = r'''@echo off
+setlocal
+where pwsh.exe >nul 2>nul
+if errorlevel 1 goto windows_powershell
+pwsh.exe -NoLogo -NoProfile -File "%~dp0verify-and-start.ps1" %*
+exit /b %errorlevel%
+:windows_powershell
+where powershell.exe >nul 2>nul
+if errorlevel 1 goto missing_powershell
+powershell.exe -NoLogo -NoProfile -File "%~dp0verify-and-start.ps1" %*
+exit /b %errorlevel%
+:missing_powershell
+echo PowerShell was not found. Install PowerShell, then retry.
+exit /b 1
+'''
+    return ps1, cmd
+
+
+def package_readme(version: str) -> str:
+    return f'''# 在座 {version} Windows 测试包：先校验，再启动
+
+## 全新解压与启动
+
+1. 把整个 ZIP 解压到一个全新的目录；不要把新旧包覆盖合并。
+2. 双击 `start-verified.cmd`，或在 PowerShell 中运行：
+   `& '.\\verify-and-start.ps1'`
+   仅静态核验、不运行客户端：`& '.\\verify-and-start.ps1' -VerifyOnly`。
+   CMD 优先调用 pwsh、否则 Windows PowerShell，均使用 `-NoProfile -File`。
+   不读取 PowerShell profile、不提权、不绕过执行策略；本机策略可能在脚本执行前拦截。
+   若被拦截，不修改执行策略，也不动态加载脚本绕过；请先人工核对发布的 ZIP 摘要及
+   SHA256SUMS，或由发布者的打包工具做静态核验，再直接运行 `zaizuo_mobile_probe.exe`。
+   直接运行 EXE 不会自动校验；这不是校验脚本的自动回退，不能当作已执行脚本校验。
+3. 启动前按 SHA256SUMS 核对本包白名单内全部文件的存在性、非链接属性及 SHA-256；
+   缺失、替换、哈希不符、重复/越界清单项均报固定中文错误并退出，不启动客户端。
+   只检查清单白名单，不枚举旁边目录，不读取 APPDATA、token 或私人资料。
+4. 不传参数时，应用保持其原有默认启动行为；校验器不创建、修改或迁移 profile。
+   校验字节一致性不等于签名认证；它不能证明发布者身份、AOT 对应源码或运行中的窗口版本。
+   如脚本与清单同时被替换，不能依靠包内自校验辨认，请另行核验发布的 ZIP 摘要。
+
+## 升级规则：data 不是账号资料
+
+- `data` 是程序代码和运行资源（含 `data/app.so`），必须与当前完整新包配套。
+  **不能把旧 test4/test9 的 data 或 app.so 覆盖到新包**；否则仍可能运行旧代码，校验器会拒绝启动。
+- `zaizuo-data` 是私人账号目录，**不要进包**，不要复制进程序 `data`；不要上传账号目录、密钥或令牌。
+- 要继续使用旧 test9 的私人目录，可在 PowerShell 中显式传入旧目录的绝对路径，例如：
+  `& '.\\verify-and-start.ps1' -DataDirectory 'D:\\old-test9\\zaizuo-data'`
+  参数以一个 `--data-dir=绝对路径` 传给客户端；可含空格/中文，不移动、不复制、不共享旧目录。
+  此示例路径须由用户自己替换；校验器不访问或创建目标目录，客户端启动后仍会正常使用所选资料。
+- CMD 会透传参数；含复杂字符时推荐直接在 PowerShell 使用上述 `-DataDirectory` 方式。
+  本包不写死任何旧目录，也不自动生成指向私人目录的本机快捷脚本。
+- 同一个私人目录不能多开：先正常退出所有使用该目录的旧客户端，再启动新版本。
+  不要让两个进程同时读写同一目录；保留旧目录并不表示可让新旧客户端并发共享。
+
+## 包内容与验证边界
+
+BUILD.json 记录打包声明、来源和复制文件哈希；SOURCE.md 记录对应源码与许可边界。
+SHA256SUMS 覆盖所有运行时、公开文档、BUILD.json、SOURCE.md、本说明和两个启动脚本，
+不包含自身。打包时还比较 source → stage → ZIP → 临时解压树，未运行真实客户端。
+'''
+
+
 def verify_package(stage: Path, archive: Path, sources: dict[str, Path],
                    copied_hashes: dict[str, str]) -> dict[str, str]:
     """核对当前 source → stage → ZIP → 新临时解压树，全部逐文件 exact。"""
@@ -352,6 +521,14 @@ The corresponding source must remain available at no additional charge; follow
 AGPL sections 6 and 13 where applicable. Third-party notices retain their terms.
 No private profile, Git credential or user data directory belongs in this package.
 """)
+    write_new(stage / "README.md", package_readme(version))
+    expected_files = sorted(set(sources) | set(GENERATED_FILES))
+    ps1, cmd = windows_entrypoints(expected_files)
+    # Windows PowerShell 5.1 需要 BOM 才能可靠识别中文；CMD 保持 ASCII + CRLF。
+    with (stage / "verify-and-start.ps1").open("x", encoding="utf-8-sig", newline="\r\n") as script:
+        script.write(ps1)
+    with (stage / "start-verified.cmd").open("x", encoding="ascii", newline="\r\n") as script:
+        script.write(cmd)
     hashes = {name: file_hash(path) for name, path in tree_files(stage).items()}
     write_new(stage / "SHA256SUMS", "".join(f"{hashes[name]}  {name}\n" for name in sorted(hashes)))
     with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as bundle:

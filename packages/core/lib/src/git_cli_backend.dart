@@ -68,6 +68,10 @@ class GitCliBackend implements GitBackend {
     final command = <String>[
       '--no-pager',
       '--no-replace-objects',
+      // Windows' default MAX_PATH can reject temporary incoming refs only after
+      // the first device branch has been published. Enable Git's own long-path
+      // support per child process, never global config or OS/registry policy.
+      if (Platform.isWindows) ...['-c', 'core.longpaths=true'],
       '-c',
       'core.hooksPath=${p.join(_metadata, 'empty-hooks')}',
       '-c',
@@ -344,6 +348,10 @@ class GitCliBackend implements GitBackend {
   static GitSyncException _networkFailure(String stderr) {
     final text =
         stderr.substring(0, stderr.length.clamp(0, 16384)).toLowerCase();
+    if (RegExp(r'filename too long|file name too long|path too long')
+        .hasMatch(text)) {
+      return const GitSyncException('git_path_too_long', '本机Git路径超过限制');
+    }
     if (RegExp(
             r'\b401\b|auth ?failed|authentication ?failed|could not read username|could not read password|terminal prompts disabled')
         .hasMatch(text)) {

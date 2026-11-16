@@ -17,6 +17,14 @@ void main() {
     }
   });
 
+  test('Windows path limit errors are distinct and never echo the local path',
+      () {
+    final failure = GitCliBackend.classifyNetworkFailure(
+        "error: cannot lock ref 'refs/zaizuo-incoming/nonce/device': Unable to create 'C:/private-token-area/refs/device.lock': Filename too long");
+    expect(failure.code, 'git_path_too_long');
+    expect(failure.message, isNot(contains('private-token-area')));
+  });
+
   test('existing classifications stay stable', () {
     expect(
         GitCliBackend.classifyNetworkFailure(
