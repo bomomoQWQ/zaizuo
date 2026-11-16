@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:zaizuo_domain/zaizuo_domain.dart';
 
 import 'client_controller.dart';
+import 'git_config_store.dart';
 import 'project_licenses.dart';
 
 /// The client owns its controller unless one is explicitly supplied by a test.
@@ -946,11 +947,24 @@ class _ClientAppState extends State<ClientApp> {
   }
 
   Future<void> _settings() async {
-    final remote = TextEditingController(text: _client.gitRemote ?? '');
-    final username = TextEditingController(text: 'x-access-token');
+    // Restoring the scope is essential: using a default username here could
+    // accidentally clear a different token while claiming the original is gone.
+    GitConfig? saved;
+    try {
+      saved = await GitConfigStore(widget.root).load();
+    } catch (_) {
+      /* Local messages remain available even if binding is invalid. */
+    }
+    if (!mounted) return;
+    final remote = TextEditingController(
+      text: _client.gitRemote ?? saved?.remote ?? '',
+    );
+    final username = TextEditingController(
+      text: saved?.username ?? 'x-access-token',
+    );
     final token = TextEditingController();
-    bool remember = false;
-    bool useSaved = false;
+    bool remember = saved?.remember ?? false;
+    bool useSaved = saved?.remember ?? false;
     String? credentialStatus;
     await showModalBottomSheet<void>(
       context: _dialogContext,
@@ -1055,18 +1069,22 @@ class _ClientAppState extends State<ClientApp> {
                                 try {
                                   await widget.configureGit!(
                                     _client,
-                                    remote.text.trim(),
-                                    username.text.trim(),
+                                    saved?.remote ?? remote.text.trim(),
+                                    saved?.username ?? username.text.trim(),
                                     null,
                                     false,
                                     false,
                                     true,
                                   );
-                                  if (context.mounted)
-                                    setSheetState(
-                                      () => credentialStatus =
-                                          '已清除此范围的本机令牌，并关闭当前Git连接。',
-                                    );
+                                  if (context.mounted) {
+                                    setSheetState(() {
+                                      saved = null;
+                                      remember = false;
+                                      useSaved = false;
+                                      credentialStatus =
+                                          '已清除当前保存绑定的本机令牌，并关闭Git连接。';
+                                    });
+                                  }
                                 } catch (_) {
                                   if (context.mounted)
                                     setSheetState(

@@ -78,6 +78,14 @@ class ClientController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
+  /// Binding/secure-storage failures must not prevent viewing local messages or
+  /// silently select a different credential source. Only allowlisted codes are
+  /// rendered; arbitrary diagnostics and secret values never enter the UI.
+  void reportGitConfigurationError(String code) {
+    error = _safeError(GitSyncException(code, '')).message;
+    _notify();
+  }
+
   /// 连续点击排队，不丢弃操作；close 必须等此前全部文件写入完成。
   Future<T> _queue<T>(Future<T> Function() action) {
     if (_stopping) {
@@ -159,7 +167,9 @@ class ClientController extends ChangeNotifier {
       'credential_invalid_input': '令牌格式无效',
       'credential_corrupt': '本机保存的令牌已损坏，请重新输入',
       'credential_invalidated': '本机保存的令牌已失效，请重新输入',
-      'credential_unavailable': '本机安全存储暂时不可用',
+      'credential_unavailable': '本机安全存储暂时不可用，未改用系统凭据；请重新输入令牌',
+      'git_binding_write_failed': 'Git绑定未能保存；账号资料仍保留，请检查本机存储后重试',
+      'git_binding_clear_failed': 'Git绑定未能清除；请核对本机存储，不能视为已忘记配置',
       'invalid_remote': 'Git 仓库地址无效',
       'unmanaged_repository': '同步目录不是受管空目录',
       'repository_identity': '同步目录身份不匹配',

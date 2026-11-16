@@ -11,6 +11,7 @@ import 'package:zaizuo_git_mobile/git_mobile.dart';
 import 'package:zaizuo_runtime/zaizuo_runtime.dart';
 
 import 'client_app.dart';
+import 'git_binding_service.dart';
 import 'git_config_store.dart';
 import 'git_token_store.dart';
 import 'client_controller.dart';
@@ -86,6 +87,35 @@ class _ClientEntryState extends State<ClientEntry> {
     );
   }
 
+  GitBindingService _bindings(ClientController client) {
+    final config = GitConfigStore(client.root);
+    final tokens = GitTokenStore(
+      Directory(p.join(client.root.path, 'git-credentials')),
+    );
+    return GitBindingService(
+      loadConfig: config.load,
+      saveConfig: config.save,
+      clearConfig: config.clear,
+      readToken: tokens.read,
+      saveToken: tokens.save,
+      deleteToken: tokens.delete,
+      connect: (remote, credential) async {
+        _sessionCredential = credential;
+        try {
+          await client.configureGit(remote);
+          return client.error == null;
+        } finally {
+          _sessionCredential = null;
+        }
+      },
+      disconnect: () async {
+        await client.disconnectGit();
+        _sessionCredential = null;
+        return client.error == null;
+      },
+    );
+  }
+
   Future<void> _configureGit(
     ClientController client,
     String remote,
@@ -95,118 +125,39 @@ class _ClientEntryState extends State<ClientEntry> {
     bool useSaved,
     bool forget,
   ) async {
-    // Storage and validation failures must surface as stable Git codes, not the
-    // generic operation_failed fallback.
-    try {
-      await _configureGitInner(
-        client,
-        remote,
-        username,
-        token,
-        remember,
-        useSaved,
-        forget,
-      );
-    } on GitSyncException {
-      rethrow;
-    } on GitTokenStoreException catch (error) {
-      throw GitSyncException(
-        error.code == 'credential_unsupported'
-            ? 'credential_unsupported'
-            : error.code,
-        '本机令牌存储不可用',
-      );
-    } on ArgumentError {
-      throw const GitSyncException('invalid_credentials', 'HTTPS地址、用户名或令牌格式无效');
-    }
-  }
-
-  Future<void> _configureGitInner(
-    ClientController client,
-    String remote,
-    String username,
-    String? token,
-    bool remember,
-    bool useSaved,
-    bool forget,
-  ) async {
-    final store = GitTokenStore(
-      Directory(p.join(client.root.path, 'git-credentials')),
-    );
+    final service = _bindings(client);
     if (forget) {
-      await client.disconnectGit();
-      if (client.error != null)
+      if (!await service.forget(remote: remote, username: username)) {
         throw const GitSyncException('git_failed', '未能断开当前连接');
-      _sessionCredential = null;
-      await store.delete(repositoryUrl: remote, username: username);
-      await GitConfigStore(client.root).clear();
-      return;
-    }
-    if (remote.trim().isEmpty || username.trim().isEmpty) {
-      throw const GitSyncException('invalid_credentials', '缺少仓库地址或用户名');
-    }
-    String? secret = token;
-    if (secret == null && useSaved) {
-      secret = await store.read(repositoryUrl: remote, username: username);
-      if (secret == null)
-        throw const GitSyncException('credentials_required', '此范围无已保存令牌');
-    }
-    final credential = secret == null
-        ? null
-        : GitHttpsToken(repoUrl: remote, username: username, token: secret);
-    if (credential != null && remember && token != null) {
-      await store.save(
-        repositoryUrl: remote,
+      }
+    } else {
+      await service.configure(
+        remote: remote,
         username: username,
-        token: secret!,
-      );
-    }
-    _sessionCredential = credential;
-    try {
-      await client.configureGit(remote);
-    } finally {
-      _sessionCredential = null;
-    }
-    if (client.error == null) {
-      // Remember the binding (never the token) so an upgraded client reconnects
-      // the same repository without retyping the address.
-      await GitConfigStore(client.root).save(
-        GitConfig(
-          remote: remote,
-          username: username,
-          remember: remember && credential != null,
-        ),
+        token: token,
+        remember: remember,
+        useSaved: useSaved,
       );
     }
   }
 
-  /// Restores the saved binding after unlock. Only local state is touched:
-  /// GitSync.initialize does not fetch, and no network call happens here.
+  /// Restore only local state. A failed credential read never invokes a Git
+  /// factory (and therefore cannot fall back to a host credential helper).
   Future<void> _restoreGit(ClientController client) async {
-    final saved = await GitConfigStore(client.root).load();
-    if (saved == null || client.isOpen == false) return;
-    String? secret;
-    if (saved.remember) {
-      try {
-        secret = await GitTokenStore(
-          Directory(p.join(client.root.path, 'git-credentials')),
-        ).read(repositoryUrl: saved.remote, username: saved.username);
-      } on GitTokenStoreException {
-        secret =
-            null; // A missing/undecryptable token must not block unlocking.
-      }
-    }
-    _sessionCredential = secret == null
-        ? null
-        : GitHttpsToken(
-            repoUrl: saved.remote,
-            username: saved.username,
-            token: secret,
-          );
+    if (!client.isOpen) return;
     try {
-      await client.configureGit(saved.remote);
+      await _bindings(client).restore();
+    } on GitSyncException catch (error) {
+      client.reportGitConfigurationError(error.code);
+    } on GitTokenStoreException {
+      client.reportGitConfigurationError('credential_unavailable');
+    } on FormatException {
+      client.reportGitConfigurationError('invalid_credentials');
+    } on ArgumentError {
+      client.reportGitConfigurationError('invalid_credentials');
     } catch (_) {
-      // Reported through client.error; the workspace still opens normally.
+      // A convenience binding must never prevent the local node unlocking.
+      client.reportGitConfigurationError('git_failed');
     } finally {
       _sessionCredential = null;
     }

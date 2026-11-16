@@ -6,9 +6,105 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zaizuo_core/zaizuo_core.dart';
 import 'package:zaizuo_mobile_probe/client_app.dart';
 import 'package:zaizuo_mobile_probe/client_controller.dart';
+import 'package:zaizuo_mobile_probe/git_config_store.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  testWidgets(
+    'settings restores username/preferences and forget uses saved scope rather than edited fields',
+    (tester) async {
+      final root = (await tester.runAsync(() async {
+        final dir = await Directory.systemTemp.createTemp('zgitscope-');
+        return Directory(await dir.resolveSymbolicLinks());
+      }))!;
+      final client = ClientController(
+        root,
+        parameters: const KdfParameters(memoryKiB: 32, iterations: 1),
+      );
+      await tester.runAsync(() async {
+        await client.create(
+          name: 'scopeui',
+          displayName: '范围测试',
+          password: 'N7!uiTestX8@Only',
+        );
+        await GitConfigStore(root).save(
+          const GitConfig(
+            remote: 'https://example.invalid/original.git',
+            username: 'alice',
+            remember: true,
+          ),
+        );
+      });
+      List<Object?>? forgotten;
+      await tester.pumpWidget(
+        ClientApp(
+          root: root,
+          controller: client,
+          configureGit:
+              (_, remote, username, token, remember, useSaved, forget) async {
+                if (forget) forgotten = [remote, username, token];
+              },
+        ),
+      );
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      });
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        await tester.tap(find.byTooltip('设置与同步'));
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      });
+      await tester.pumpAndSettle();
+      Finder field(String label) => find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.labelText == label,
+      );
+      expect(
+        tester.widget<TextField>(field('HTTPS 用户名')).controller!.text,
+        'alice',
+      );
+      expect(
+        tester.widget<TextField>(field('Git 远端')).controller!.text,
+        'https://example.invalid/original.git',
+      );
+      expect(
+        tester
+            .widget<CheckboxListTile>(
+              find.widgetWithText(CheckboxListTile, '加密保存在本机'),
+            )
+            .value,
+        isTrue,
+      );
+      expect(
+        tester
+            .widget<CheckboxListTile>(
+              find.widgetWithText(CheckboxListTile, '使用此仓库已保存的令牌'),
+            )
+            .value,
+        isTrue,
+      );
+      await tester.enterText(
+        field('Git 远端'),
+        'https://example.invalid/edited.git',
+      );
+      await tester.ensureVisible(field('HTTPS 用户名'));
+      await tester.enterText(field('HTTPS 用户名'), 'bob');
+      tester.testTextInput.hide();
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('清除已保存令牌并断开Git'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('清除已保存令牌并断开Git'));
+      await tester.pumpAndSettle();
+      expect(forgotten, [
+        'https://example.invalid/original.git',
+        'alice',
+        null,
+      ]);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(client.shutdown);
+      await tester.runAsync(() => root.delete(recursive: true));
+    },
+  );
   testWidgets(
     'optional PAT is obscured, opt-in saved, and cleared after configuration',
     (tester) async {
@@ -47,10 +143,13 @@ void main() {
         ),
       );
       await tester.runAsync(() async {
-        await Future<void>.delayed(const Duration(milliseconds: 40));
+        await Future<void>.delayed(const Duration(milliseconds: 500));
       });
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('设置与同步'));
+      await tester.runAsync(() async {
+        await tester.tap(find.byTooltip('设置与同步'));
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      });
       await tester.pumpAndSettle();
       Finder field(String label) => find.byWidgetPredicate(
         (w) => w is TextField && w.decoration?.labelText == label,

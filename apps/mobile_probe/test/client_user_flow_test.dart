@@ -28,7 +28,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(ClientApp(root: root, controller: client));
     await tester.runAsync(() async {
-      await Future<void>.delayed(const Duration(milliseconds: 40));
+      await Future<void>.delayed(const Duration(milliseconds: 500));
     });
     await tester.pumpAndSettle();
     Future<void> fill(String label, String value) async {
@@ -78,7 +78,10 @@ void main() {
     expect(find.text('从界面按钮写入的真实消息'), findsOneWidget);
     expect(client.messages, hasLength(1));
     // Use the actual settings/lock controls, not a direct controller shortcut.
-    await tester.tap(find.byTooltip('设置与同步'));
+    await tester.runAsync(() async {
+      await tester.tap(find.byTooltip('设置与同步'));
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    });
     await tester.pumpAndSettle();
     await click('锁定本机资料');
     expect(client.isOpen, isFalse);
@@ -104,7 +107,7 @@ void main() {
     ))!;
     await tester.pumpWidget(ClientApp(root: root, controller: reopened));
     await tester.runAsync(() async {
-      await Future<void>.delayed(const Duration(milliseconds: 40));
+      await Future<void>.delayed(const Duration(milliseconds: 500));
     });
     await tester.pumpAndSettle();
     await fill('密码', 'M8!vR2@kL9#sT6%z');
