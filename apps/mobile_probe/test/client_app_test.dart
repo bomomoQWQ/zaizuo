@@ -28,6 +28,12 @@ void main() {
       });
       await tester.pumpAndSettle();
       expect(find.text('在座'), findsWidgets);
+      expect(
+        find.text(
+          '测试版 · ${const String.fromEnvironment('ZAIZUO_BUILD_LABEL', defaultValue: 'dev')}',
+        ),
+        findsOneWidget,
+      );
       expect(find.byType(TextField), findsWidgets);
       expect(controller.isOpen, isFalse);
       expect(controller.conversations, isEmpty);

@@ -174,10 +174,16 @@ class _ClientAppState extends State<ClientApp> {
     ),
   );
 
+  // Embedded at compile time; renaming/copying the containing folder cannot
+  // change the version actually running in the AOT image.
+  static const _buildLabel = String.fromEnvironment(
+    'ZAIZUO_BUILD_LABEL',
+    defaultValue: 'dev',
+  );
   Widget _badge() => const Chip(
     visualDensity: VisualDensity.compact,
     avatar: Icon(Icons.science_outlined, size: 16),
-    label: Text('测试版'),
+    label: Text('测试版 · $_buildLabel'),
   );
 
   Widget _feedback() {
@@ -368,7 +374,13 @@ class _ClientAppState extends State<ClientApp> {
               : null,
           title: const Text('在座'),
           actions: [
-            _badge(),
+            if (wide)
+              _badge()
+            else
+              SizedBox(
+                width: 112,
+                child: FittedBox(fit: BoxFit.scaleDown, child: _badge()),
+              ),
             IconButton(
               tooltip: '社交与社区',
               onPressed: _busy ? null : _social,

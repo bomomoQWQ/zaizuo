@@ -98,7 +98,10 @@ void main() {
     fixture.repos.add(wrongRepo);
     final wrong =
         CommunityGit(repository: wrongRepo, pinnedFingerprint: '0' * 64);
-    await expectLater(wrong.pull(), throwsStateError);
+    await expectLater(
+        wrong.pull(),
+        throwsA(isA<GitSyncException>()
+            .having((e) => e.code, 'code', 'community_fingerprint_mismatch')));
     final checkpoint = jsonObject(await fixture.checkpoint(wrongRepo));
     expect(checkpoint['revision'], 0);
     expect(checkpoint['head'], isNull);
@@ -127,7 +130,10 @@ void main() {
     final json = fixture.first.toJson()
       ..['signature'] = base64Encode(List<int>.filled(64, 0));
     await fixture.raw({'manifest.json': json, 'manifests/00000001.json': json});
-    await expectLater(fixture.reader.pull(), throwsStateError);
+    await expectLater(
+        fixture.reader.pull(),
+        throwsA(isA<GitSyncException>()
+            .having((e) => e.code, 'code', 'invalid_manifest_signature')));
     final before = await fixture.checkpoint(fixture.readerRepo);
     await fixture.raw(fixture.files([fixture.first]), fileMode: '100755');
     await expectLater(
@@ -152,7 +158,10 @@ void main() {
       'manifests/00000001.json': broken.toJson(),
       'manifests/00000002.json': second.toJson(),
     });
-    await expectLater(fixture.reader.pull(), throwsStateError);
+    await expectLater(
+        fixture.reader.pull(),
+        throwsA(isA<GitSyncException>()
+            .having((e) => e.code, 'code', 'invalid_manifest_signature')));
     expect(jsonObject(await fixture.checkpoint(fixture.readerRepo))['revision'],
         0);
   });
@@ -175,7 +184,10 @@ void main() {
         revision: 2,
         previousHash: '0' * 64);
     await fixture.raw(fixture.files([fixture.first, badSecond]));
-    await expectLater(fixture.reader.pull(), throwsStateError);
+    await expectLater(
+        fixture.reader.pull(),
+        throwsA(isA<GitSyncException>()
+            .having((e) => e.code, 'code', 'invalid_manifest_signature')));
   });
 
   test('latest root pointer must match newest full chain record', () async {

@@ -162,6 +162,27 @@ class ClientController extends ChangeNotifier {
       'invalid_remote': 'Git 仓库地址无效',
       'unmanaged_repository': '同步目录不是受管空目录',
       'repository_identity': '同步目录身份不匹配',
+      'invalid_manifest_tree':
+          '远端main不是在座社区仓库（可能只有README或其他文件）；请选空仓库，已有社区须导入社区资料并核对指纹。不会覆盖远端',
+      'invalid_manifest': '远端社区配置格式无效，已停止同步；请核对仓库，不会覆盖远端',
+      'manifest_conflict': '远端社区配置与本机不一致，拒绝覆盖；请核对社区资料与指纹',
+      'manifest_gap': '远端缺少连续的社区配置历史，已停止同步',
+      'manifest_rewrite': '远端已验收的社区配置被修改或回退，拒绝同步',
+      'community_mismatch': '此同步目录属于另一个社区，请核对仓库及社区指纹',
+      'community_fingerprint_mismatch':
+          '仓库属于另一社区：根指纹与本机不匹配。已停止同步，不会覆盖；加入已有社区需导入其公开配置并核对指纹',
+      'invalid_manifest_signature': '远端社区签名或版本链验证失败，已停止同步；请勿重新钉住或强制覆盖',
+      'remote_rewrite': '远端分支被回退或分叉，拒绝同步；不要删除本机信任记录',
+      'remote_deleted': '已确认的远端分支被删除，须显式核对后恢复',
+      'local_fork': '本机与远端历史分叉，拒绝强制覆盖',
+      'missing_pins': '本机同步信任记录缺失，拒绝重新信任远端；请保留资料并核对恢复',
+      'invalid_pins': '本机同步信任记录无效，已停止同步',
+      'missing_checkpoint': '本机社区检查点缺失，已停止同步；请勿删除资料以绕过检查',
+      'invalid_checkpoint': '本机社区检查点无效，已停止同步',
+      'unsafe_configuration': '受管Git配置或hooks已变化，拒绝执行；请核对本机同步目录',
+      'credential_remote_mismatch': '令牌未绑定此仓库地址，已拒绝发送',
+      'push_not_observed': '推送后未能从远端确认内容，尚不能确认同步成功',
+      'git_unavailable': '无法启动系统Git，请确认已安装Git',
       'invalid_account_name': '账户名须为1–14位英文字母、数字或下划线',
       'invalid_display_name': '显示名称须为1–14个显示字符',
       'invalid_password': '密码须为12–1024位、含大写和小写字母、不能含账户名或常见弱模式',
@@ -196,8 +217,8 @@ class ClientController extends ChangeNotifier {
       if (selectedConversation == null) selectedConversationId = null;
       _notify();
     });
-    _errors = opened.errors.listen((_) {
-      error = _safeError(const DomainException('git_failed', '')).message;
+    _errors = opened.errors.listen((code) {
+      error = _safeError(DomainException(code, '')).message;
       _notify();
     });
     // 不自动启动 OneBot、中继或后台联网；用户通过同步按钮显式触发。

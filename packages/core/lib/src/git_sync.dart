@@ -1151,8 +1151,31 @@ class GitSync {
       if (manifest.revision != revision) {
         throw const GitSyncException('manifest_gap', '文件名与签名版本不一致');
       }
-      await manifest.verify(fingerprint,
-          previous: history.isEmpty ? null : history.last);
+      // A different root is not an authentication/storage failure. Stop before
+      // accepting its history or writing a checkpoint; never auto-repin it.
+      String remoteFingerprint;
+      try {
+        remoteFingerprint = await manifest.fingerprint();
+      } on FormatException {
+        throw const GitSyncException('invalid_manifest', '远端社区配置格式无效');
+      } on TypeError {
+        throw const GitSyncException('invalid_manifest', '远端社区配置字段类型无效');
+      }
+      if (remoteFingerprint != fingerprint) {
+        throw const GitSyncException(
+            'community_fingerprint_mismatch', '远端社区根指纹与本机确认值不同');
+      }
+      try {
+        await manifest.verify(fingerprint,
+            previous: history.isEmpty ? null : history.last);
+      } on StateError {
+        throw const GitSyncException(
+            'invalid_manifest_signature', '远端社区签名或版本链验证失败');
+      } on FormatException {
+        throw const GitSyncException('invalid_manifest', '远端社区配置格式无效');
+      } on TypeError {
+        throw const GitSyncException('invalid_manifest', '远端社区配置字段类型无效');
+      }
       history.add(manifest);
     }
     final pointer = await _readManifestBlob(head, 'manifest.json');
@@ -1171,15 +1194,23 @@ class GitSync {
     if (size == null || size < 1 || size > 4 * 1024 * 1024) {
       throw const GitSyncException('archive_limit', '社区manifest超过4MiB上限');
     }
-    final text = utf8.decode(await _git(() => _backend.readBlob(spec)));
-    if (!text.endsWith('\n'))
-      throw const GitSyncException('invalid_manifest', 'manifest必须以LF结尾');
-    final json = jsonObject(text.substring(0, text.length - 1));
-    final manifest = CommunityManifest.fromJson(json);
-    if ('${canonicalJson(manifest.toJson())}\n' != text) {
-      throw const GitSyncException('invalid_manifest', 'manifest不是规范化公开文档');
+    final bytes = await _git(() => _backend.readBlob(spec));
+    try {
+      final text = utf8.decode(bytes);
+      if (!text.endsWith('\n')) {
+        throw const GitSyncException('invalid_manifest', 'manifest必须以LF结尾');
+      }
+      final json = jsonObject(text.substring(0, text.length - 1));
+      final manifest = CommunityManifest.fromJson(json);
+      if ('${canonicalJson(manifest.toJson())}\n' != text) {
+        throw const GitSyncException('invalid_manifest', 'manifest不是规范化公开文档');
+      }
+      return manifest;
+    } on FormatException {
+      throw const GitSyncException('invalid_manifest', 'manifest编码或格式无效');
+    } on TypeError {
+      throw const GitSyncException('invalid_manifest', 'manifest字段类型无效');
     }
-    return manifest;
   }
 
   void _requireManifestPrefix(
