@@ -22,7 +22,10 @@ class ClientApp extends StatefulWidget {
     this.configureGit,
     this.onDeveloperTools,
     this.navigatorKey,
+    this.restoreGit,
   });
+
+  final Future<void> Function(ClientController client)? restoreGit;
 
   final Directory root;
   final ClientController? controller;
@@ -139,6 +142,10 @@ class _ClientAppState extends State<ClientApp> {
       _confirmation.clear();
       _community.clear();
       _fingerprint.clear();
+      // Restore the saved Git binding (address/username only; the token stays in
+      // DPAPI/Keystore). initialize() does not fetch, so startup stays offline.
+      final restore = widget.restoreGit;
+      if (restore != null) await restore(_client);
     }
   }
 
@@ -990,6 +997,7 @@ class _ClientAppState extends State<ClientApp> {
                       decoration: const InputDecoration(
                         labelText: 'Git 远端',
                         hintText: 'SSH 或不含凭据的 HTTPS 地址',
+                        helperText: '已随资料目录保存；换版本后自动恢复，令牌单独加密保存',
                       ),
                     ),
                     const SizedBox(height: 8),

@@ -11,6 +11,7 @@ import 'package:zaizuo_git_mobile/git_mobile.dart';
 import 'package:zaizuo_runtime/zaizuo_runtime.dart';
 
 import 'client_app.dart';
+import 'git_config_store.dart';
 import 'git_token_store.dart';
 import 'client_controller.dart';
 import 'main.dart' show MobileProbe;
@@ -138,6 +139,7 @@ class _ClientEntryState extends State<ClientEntry> {
         throw const GitSyncException('git_failed', '未能断开当前连接');
       _sessionCredential = null;
       await store.delete(repositoryUrl: remote, username: username);
+      await GitConfigStore(client.root).clear();
       return;
     }
     if (remote.trim().isEmpty || username.trim().isEmpty) {
@@ -162,6 +164,49 @@ class _ClientEntryState extends State<ClientEntry> {
     _sessionCredential = credential;
     try {
       await client.configureGit(remote);
+    } finally {
+      _sessionCredential = null;
+    }
+    if (client.error == null) {
+      // Remember the binding (never the token) so an upgraded client reconnects
+      // the same repository without retyping the address.
+      await GitConfigStore(client.root).save(
+        GitConfig(
+          remote: remote,
+          username: username,
+          remember: remember && credential != null,
+        ),
+      );
+    }
+  }
+
+  /// Restores the saved binding after unlock. Only local state is touched:
+  /// GitSync.initialize does not fetch, and no network call happens here.
+  Future<void> _restoreGit(ClientController client) async {
+    final saved = await GitConfigStore(client.root).load();
+    if (saved == null || client.isOpen == false) return;
+    String? secret;
+    if (saved.remember) {
+      try {
+        secret = await GitTokenStore(
+          Directory(p.join(client.root.path, 'git-credentials')),
+        ).read(repositoryUrl: saved.remote, username: saved.username);
+      } on GitTokenStoreException {
+        secret =
+            null; // A missing/undecryptable token must not block unlocking.
+      }
+    }
+    _sessionCredential = secret == null
+        ? null
+        : GitHttpsToken(
+            repoUrl: saved.remote,
+            username: saved.username,
+            token: secret,
+          );
+    try {
+      await client.configureGit(saved.remote);
+    } catch (_) {
+      // Reported through client.error; the workspace still opens normally.
     } finally {
       _sessionCredential = null;
     }
@@ -269,6 +314,7 @@ class _ClientEntryState extends State<ClientEntry> {
         navigatorKey: navigatorKey,
         gitFactory: _gitFactory,
         configureGit: _configureGit,
+        restoreGit: _restoreGit,
         onDeveloperTools: () => navigatorKey.currentState?.push(
           MaterialPageRoute<void>(
             builder: (routeContext) =>
